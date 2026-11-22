@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # 프로젝트: 할 일 관리 앱
 - 하루 10~20개 할 일을 관리하는 1인용 앱. 화면은 한 페이지.
-- 기능: 할 일 추가/수정/삭제, 완료 체크, 카테고리(업무/개인/공부) 필터, 오늘 진행률, 매일 08:00 확인 알림(주말 포함), JSON 백업 내보내기/가져오기.
+- 기능: 할 일 추가/수정/삭제, 완료 체크, 카테고리(업무/개인/공부) 필터, 오늘 진행률, 매일 08:00 확인 알림(주말 포함), 월 달력 일정 추가/삭제, JSON 백업 내보내기/가져오기.
 
 ## 실행과 테스트
 빌드·린트 단계는 없습니다. 파일을 고친 뒤 브라우저로 바로 엽니다.
@@ -20,7 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 위쪽 `var Store = (function () { ... })()`: 데이터 계층. 저장·불러오기, 마이그레이션, 할 일 CRUD, 오늘 목록·진행률, 날짜 처리, 알림 판단, 백업 검증·가져오기. DOM을 쓰지 않습니다.
   - 아래쪽 IIFE: 화면 코드. `#todo-list`가 없으면 바로 끝나므로 `tests.html`에서 `app.js`를 그대로 불러와도 화면 코드는 실행되지 않습니다.
   - 화면 코드는 `Store`의 공개 함수만 호출합니다. 데이터 로직은 `Store`에 넣고 `tests.html`에 테스트를 추가합니다.
-- 화면 갱신은 변경 후 `afterChange()` → `Store.save()` 후 `render()`로 목록 전체를 다시 그리는 방식입니다.
+- 화면 갱신은 변경 후 `afterChange()` → `Store.save()` 후 `render()`로 목록 전체를 다시 그리는 방식입니다. 일정 영역은 따로 `renderSchedule()`이 달력과 선택한 날의 목록을 다시 그립니다(선택한 날짜·보고 있는 달은 저장하지 않음).
+- 삭제 실행 취소(토스트, Ctrl+Z)는 할 일과 일정이 함께 씁니다. `lastDeleted = { kind: 'todo'|'event', item }`.
 - 보조 localStorage 키: 가져오기 직전 데이터 `todo-app-v1-before-import`, 읽지 못한 깨진 데이터 `todo-app-v1-corrupt`.
 - `sw.js`: `ASSETS` 목록의 앱 파일을 캐시 우선 + 뒤에서 갱신. 자동 `skipWaiting`을 하지 않고, 화면의 [새로고침]이 `SKIP_WAITING` 메시지를 보내 교체합니다. 앱 파일을 추가·삭제하면 `ASSETS`도 고칩니다.
 - 배포는 GitHub Pages(저장소 루트). 모든 경로는 상대 경로로 유지합니다. 자세한 배포·회사 PC 사용법은 `README.md`, 08:00 자동 열기 예약은 `SETUP.md`.
@@ -40,7 +41,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 데이터 규칙
 - todo: { id, title(1~100자), category: "work"|"personal"|"study", done, createdAt, doneAt|null, updatedAt }
 - settings: { reminderTime: "08:00", lastCategory, lastAckDate, lastNotifiedDate, activeTab: "all"|"work"|"personal"|"study" }
-- 최상위: { version: 1, todos: [], settings: {} }
+- event: { id, date: "YYYY-MM-DD"(로컬 날짜), time: "HH:MM"|null(종일), title(1~100자), createdAt }. 자동 삭제 없음.
+- 최상위: { version: 1, todos: [], events: [], settings: {} }
+  - events는 나중에 추가된 선택 항목이라 version은 1 그대로다(옛 버전 앱이 새 데이터를 깨진 데이터로 보지 않도록). events가 없는 데이터·백업도 정상으로 읽는다.
+  - events가 없는 옛 백업을 가져오면 현재 일정은 유지한다(settings가 없을 때와 같은 방식).
 - 완료 후 7일이 지난 항목은 앱 시작 시 자동 삭제.
 - ‘오늘 할 일’ = 미완료 전체 + 오늘 완료한 항목. 진행률은 이 집합 기준.
 

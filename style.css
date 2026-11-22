@@ -278,6 +278,184 @@ body {
   cursor: pointer;
 }
 
+/* 6. 일정 */
+.schedule {
+  margin-top: 32px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.schedule__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.schedule__title { margin: 0; font-size: 1.1rem; }
+.schedule__count { color: var(--text-muted); font-size: 0.9rem; }
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0;
+}
+.cal-nav__month {
+  margin: 0 4px;
+  min-width: 7.5em;
+  font-size: 1.1rem;
+  text-align: center;
+}
+.cal-nav__btn {
+  width: var(--touch);
+  height: var(--touch);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.cal-nav__today { margin-left: auto; }
+
+.cal {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.cal th {
+  padding: 4px 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.cal abbr { text-decoration: none; }
+.cal th.is-sun { color: var(--danger); }
+.cal th.is-sat { color: var(--primary); }
+.cal__cell {
+  padding: 0;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+.cal__day {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  min-height: 72px;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cal__day:hover { background: var(--bg); }
+.cal__day.is-sun .cal__num { color: var(--danger); }
+.cal__day.is-sat .cal__num { color: var(--primary); }
+.cal__day.is-other { opacity: 0.45; }
+.cal__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-width: 1.8em;
+  height: 1.8em;
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
+.cal__day.is-today .cal__num {
+  background: var(--primary);
+  color: var(--primary-text);
+  font-weight: 700;
+}
+.cal__day.is-selected {
+  background: var(--work-bg);
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+.cal__events { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cal__ev {
+  overflow: hidden;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--work-bg);
+  color: var(--work-text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cal__more { color: var(--text-muted); font-size: 0.75rem; }
+.cal__badge { display: none; }
+
+.day { margin-top: 16px; }
+.day__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+.day__today {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.8rem;
+}
+.day__empty { margin: 8px 0; color: var(--text-muted); }
+.day__empty[hidden] { display: none; }
+.event-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.event__time {
+  flex: 0 0 auto;
+  min-width: 3.2em;
+  color: var(--primary);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.event__time.is-allday { color: var(--text-muted); font-weight: 600; }
+.event__title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.event-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.event-form__time { flex: 0 0 auto; }
+.event-form__title { flex: 1 1 auto; min-width: 0; }
+.event-form input {
+  width: 100%;
+  min-height: var(--touch);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.event-form input[type="time"]:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* 설정 */
 .settings { margin-top: 24px; }
 .settings summary {
@@ -395,4 +573,23 @@ body {
   .add-form select { width: auto; }
   .toast { bottom: calc(var(--touch) + 24px + env(safe-area-inset-bottom, 0px)); }
   .tab { padding: 0 4px; }
+  .schedule { padding: 12px 8px; }
+  .cal-nav__month { min-width: 0; flex: 1 1 auto; }
+  .cal__day { min-height: var(--touch); align-items: center; padding: 2px 0; }
+  .cal__num { align-self: center; }
+  .cal__events { display: none; }
+  /* 좁은 화면: 일정 제목 대신 개수 점 */
+  .cal__badge {
+    display: block;
+    min-width: 1.4em;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--primary-text);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    text-align: center;
+  }
+  .event-form { flex-wrap: wrap; }
+  .event-form__time { flex: 1 1 100%; }
 }

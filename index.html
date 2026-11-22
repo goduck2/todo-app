@@ -81,6 +81,51 @@
       <button type="submit" class="btn btn--primary">추가</button>
     </form>
 
+    <!-- 6. 일정 (달력과 칸은 app.js의 renderSchedule()이 그림) -->
+    <section class="schedule" id="schedule" aria-labelledby="schedule-title">
+      <div class="schedule__head">
+        <h2 id="schedule-title" class="schedule__title">일정</h2>
+        <span class="schedule__count" id="month-count">이번 달 0개</span>
+      </div>
+      <div class="cal-nav">
+        <button type="button" class="cal-nav__btn" id="cal-prev" aria-label="이전 달">‹</button>
+        <h3 class="cal-nav__month" id="cal-month" aria-live="polite">2026년 11월</h3>
+        <button type="button" class="cal-nav__btn" id="cal-next" aria-label="다음 달">›</button>
+        <button type="button" class="btn cal-nav__today" id="cal-today">오늘</button>
+      </div>
+      <table class="cal" role="grid" aria-labelledby="cal-month">
+        <thead>
+          <tr>
+            <th scope="col" class="is-sun"><abbr title="일요일">일</abbr></th>
+            <th scope="col"><abbr title="월요일">월</abbr></th>
+            <th scope="col"><abbr title="화요일">화</abbr></th>
+            <th scope="col"><abbr title="수요일">수</abbr></th>
+            <th scope="col"><abbr title="목요일">목</abbr></th>
+            <th scope="col"><abbr title="금요일">금</abbr></th>
+            <th scope="col" class="is-sat"><abbr title="토요일">토</abbr></th>
+          </tr>
+        </thead>
+        <tbody id="cal-body"></tbody>
+      </table>
+
+      <div class="day" aria-labelledby="day-title">
+        <h3 class="day__title" id="day-title">11월 22일 (일)</h3>
+        <ul class="event-list" id="event-list"></ul>
+        <p class="day__empty" id="event-empty" hidden>이 날에는 일정이 없습니다</p>
+        <form class="event-form" id="event-form" autocomplete="off" novalidate>
+          <label class="event-form__time" for="event-time">
+            <span class="visually-hidden">시각(선택)</span>
+            <input type="time" id="event-time" name="time">
+          </label>
+          <label class="event-form__title" for="event-title">
+            <span class="visually-hidden">일정 내용</span>
+            <input type="text" id="event-title" name="title" maxlength="100" required placeholder="일정 내용">
+          </label>
+          <button type="submit" class="btn btn--primary">추가</button>
+        </form>
+      </div>
+    </section>
+
     <!-- 설정 -->
     <details class="settings" id="settings">
       <summary>설정</summary>

@@ -834,6 +834,109 @@
       eq(Store.save(), true, '읽기가 정상이면 저장도 정상');
     });
 
+    /* ---- 일정 ---- */
+    function goodEvent(o) {
+      var e = { id: 'e1', date: '2026-11-22', time: null, title: '일정', createdAt: 1000 };
+      for (var k in o) e[k] = o[k];
+      return e;
+    }
+    test('isDate: 실제 있는 날짜만', function () {
+      eq(['2026-11-22', '2024-02-29', '2026-02-29', '2026-13-01', '2026-11-31', '2026-1-5', '', null, 20261122].map(Store.isDate),
+        [true, true, false, false, false, false, false, false, false]);
+    });
+    test('addEvent: 공백 제거, 시각 선택, 필드 구성', function () {
+      setNow(5000);
+      var e = Store.addEvent('2026-11-22', '', '  회의  ');
+      ok(e, 'addEvent가 null');
+      eq([e.date, e.time, e.title, e.createdAt], ['2026-11-22', null, '회의', 5000]);
+      ok(typeof e.id === 'string' && e.id.length > 0, 'id 없음');
+      eq(Store.addEvent('2026-11-22', '14:30', '점심').time, '14:30');
+      eq(Store.addEvent('2026-11-22', null, '종일').time, null);
+      eq(Store.eventCount(), 3);
+    });
+    test('addEvent: 잘못된 값 거부', function () {
+      eq(Store.addEvent('2026-11-22', '', '   '), null, '빈 내용');
+      eq(Store.addEvent('2026-11-22', '', new Array(102).join('가')), null, '101자');
+      eq(Store.addEvent('2026-02-30', '', '없는 날'), null, '없는 날짜');
+      eq(Store.addEvent('2026-11-22', '25:00', '시각'), null, '잘못된 시각');
+      eq(Store.eventCount(), 0);
+    });
+    test('eventsOn: 종일 먼저, 시각순, 같은 시각은 추가순', function () {
+      setNow(1); Store.addEvent('2026-11-22', '15:00', 'c');
+      setNow(2); Store.addEvent('2026-11-22', '09:00', 'a');
+      setNow(3); Store.addEvent('2026-11-22', '', '종일');
+      setNow(4); Store.addEvent('2026-11-22', '09:00', 'b');
+      setNow(5); Store.addEvent('2026-11-23', '08:00', '다른 날');
+      eq(Store.eventsOn('2026-11-22').map(function (e) { return e.title; }), ['종일', 'a', 'b', 'c']);
+      eq(Store.eventsOn('2026-11-24'), []);
+    });
+    test('eventsInMonth: 그 달만 날짜별로 묶고 개수 계산', function () {
+      Store.addEvent('2026-11-01', '', 'a');
+      Store.addEvent('2026-11-30', '', 'b');
+      Store.addEvent('2026-11-30', '10:00', 'c');
+      Store.addEvent('2026-12-01', '', '다음 달');
+      Store.addEvent('2026-10-31', '', '지난 달');
+      var m = Store.eventsInMonth(2026, 11);
+      eq(m.total, 3);
+      eq(Object.keys(m.byDate).sort(), ['2026-11-01', '2026-11-30']);
+      eq(m.byDate['2026-11-30'].map(function (e) { return e.title; }), ['b', 'c']);
+      eq(Store.eventsInMonth(2027, 1).total, 0);
+    });
+    test('removeEvent·restoreEvent: 삭제 후 실행 취소, 중복 복원 거부', function () {
+      var e = Store.addEvent('2026-11-22', '10:00', '치과');
+      var removed = Store.removeEvent(e.id);
+      eq(removed, e, '삭제한 일정 반환');
+      eq(Store.eventCount(), 0);
+      eq(Store.removeEvent(e.id), null, '없는 id');
+      eq(Store.restoreEvent(removed), true);
+      eq(Store.eventsOn('2026-11-22'), [e], '복원');
+      eq(Store.restoreEvent(removed), false, '이미 있음');
+    });
+    test('일정은 저장되고 다시 load해도 유지, 완료 정리(purgeOld)와 무관', function () {
+      var now = L(2026, 11, 22, 12);
+      setNow(now);
+      Store.addEvent('2025-01-01', '', '아주 옛날 일정');
+      Store.configure({ key: TEST_KEY });
+      setNow(now + 30 * DAY);
+      Store.load();
+      eq(Store.eventsOn('2025-01-01').length, 1);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).version, 1, 'version은 1 그대로');
+    });
+    test('load: events 없는 옛 데이터는 빈 일정으로, corrupt 아님', function () {
+      seed({ version: 1, settings: {}, todos: [todo('a', { createdAt: 1 })] });
+      eq(Store.eventCount(), 0);
+      eq(localStorage.getItem(CORRUPT_KEY), null);
+    });
+    test('load: 잘못된 일정만 버리고 원본은 corrupt 키에 보관', function () {
+      var raw = JSON.stringify({ version: 1, settings: {}, todos: [], events: [goodEvent({}), goodEvent({ id: 'x', date: '2026-02-30' })] });
+      localStorage.setItem(TEST_KEY, raw);
+      eq(Store.load(), false);
+      eq(Store.eventCount(), 1);
+      eq(localStorage.getItem(CORRUPT_KEY), raw);
+    });
+    test('validateBackup: events 검증', function () {
+      eq(Store.validateBackup({ version: 1, todos: [], events: [goodEvent({}), goodEvent({ id: 'e2', time: '08:30' })] }).ok, true);
+      bad({ version: 1, todos: [], events: {} }, 'events');
+      bad({ version: 1, todos: [], events: [5] }, '1번째 일정');
+      bad({ version: 1, todos: [], events: [goodEvent({}), goodEvent({})] }, '2번째 일정의 id가 중복');
+      bad({ version: 1, todos: [], events: [goodEvent({ date: '2026-11-31' })] }, 'date');
+      bad({ version: 1, todos: [], events: [goodEvent({ time: '8:30' })] }, 'time');
+      bad({ version: 1, todos: [], events: [goodEvent({ time: undefined })] }, 'time');
+      bad({ version: 1, todos: [], events: [goodEvent({ title: '  ' })] }, 'title');
+      bad({ version: 1, todos: [], events: [goodEvent({ createdAt: '1' })] }, 'createdAt');
+    });
+    test('importBackup: events 있으면 교체, 없는 옛 백업은 현재 일정 유지', function () {
+      Store.addEvent('2026-11-22', '', '현재 일정');
+      var r = Store.importBackup({ version: 1, todos: [] });
+      eq([r.ok, r.events], [true, 1], 'events 없음 → 유지');
+      eq(Store.eventsOn('2026-11-22')[0].title, '현재 일정');
+      r = Store.importBackup({ version: 1, todos: [], events: [goodEvent({ id: 'n', date: '2026-12-25', title: '성탄절' })] });
+      eq([r.ok, r.events], [true, 1]);
+      eq(Store.eventsOn('2026-11-22'), [], '교체됨');
+      eq(Store.eventsOn('2026-12-25')[0].title, '성탄절');
+      eq(JSON.parse(Store.exportData()).events.length, 1, '내보내기에 포함');
+    });
+
     /* ---- 격리 ---- */
     test('실제 키(todo-app-v1)를 건드리지 않음', function () {
       Store.add('a', 'work');

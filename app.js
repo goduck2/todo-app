@@ -10,7 +10,7 @@ var Store = (function () {
 
   var key = 'todo-app-v1';
   var clock = function () { return Date.now(); };
-  var state = null;   // { version, todos, settings }
+  var state = null;   // { version, todos, events, settings }
   var lastSaveOk = true;
   var knownDay = null;   // 마지막으로 확인한 날짜(dateKey)
   var readFailed = false;   // load()에서 localStorage 읽기가 예외로 실패했는지
@@ -53,10 +53,19 @@ var Store = (function () {
     return s.length >= 1 && s.length <= 100 ? s : null;
   }
 
+  // 실제 있는 날짜 "YYYY-MM-DD"인지
+  function isDate(s) {
+    if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    var y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)), d = Number(s.slice(8, 10));
+    var dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+  }
+
   function defaults() {
     return {
       version: VERSION,
       todos: [],
+      events: [],
       settings: {
         reminderTime: '08:00', lastCategory: 'work', lastAckDate: null,
         lastNotifiedDate: null, activeTab: 'all'
@@ -89,6 +98,32 @@ var Store = (function () {
 
   function sortByCreated(a, b) { return a.createdAt - b.createdAt; }
 
+  /* 일정: { id, date: "YYYY-MM-DD", time: "HH:MM"|null, title(1~100자), createdAt } */
+
+  function copyEvent(ev) {
+    return { id: ev.id, date: ev.date, time: ev.time, title: ev.title, createdAt: ev.createdAt };
+  }
+
+  function normalizeEvent(e) {
+    if (!isObj(e)) return null;
+    var title = cleanTitle(e.title);
+    if (typeof e.id !== 'string' || !e.id || title === null || !isDate(e.date) ||
+        !isNum(e.createdAt)) return null;
+    if (e.time !== null && e.time !== undefined && !isTime(e.time)) return null;
+    return { id: e.id, date: e.date, time: isTime(e.time) ? e.time : null, title: title, createdAt: e.createdAt };
+  }
+
+  // 날짜 → 시각 없는 일정(종일) 먼저 → 시각순 → 추가순
+  function sortEvents(a, b) {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.time !== b.time) {
+      if (a.time === null) return -1;
+      if (b.time === null) return 1;
+      return a.time < b.time ? -1 : 1;
+    }
+    return a.createdAt - b.createdAt;
+  }
+
   /* ---------- 저장·불러오기 ---------- */
 
   // 이전 버전 데이터를 현재 형식으로. 미래 버전이면 null.
@@ -109,6 +144,16 @@ var Store = (function () {
       if (t) out.todos.push(t); else dropped++;
     });
     out.todos.sort(sortByCreated);
+    // events는 나중에 생긴 항목이라 없으면 빈 목록(version은 1 그대로)
+    if (Array.isArray(data.events)) {
+      data.events.forEach(function (raw) {
+        var ev = normalizeEvent(raw);
+        if (ev) out.events.push(ev); else dropped++;
+      });
+    } else if (data.events !== undefined) {
+      dropped++;
+    }
+    out.events.sort(sortEvents);
     return { state: out, dropped: dropped };
   }
 
@@ -293,6 +338,76 @@ var Store = (function () {
     };
   }
 
+  /* ---------- 일정 ---------- */
+
+  function findEvent(id) {
+    ensureLoaded();
+    for (var i = 0; i < state.events.length; i++) {
+      if (state.events[i].id === id) return state.events[i];
+    }
+    return null;
+  }
+
+  function insertEvent(ev) {
+    var i = 0;
+    while (i < state.events.length && sortEvents(state.events[i], ev) <= 0) i++;
+    state.events.splice(i, 0, ev);
+  }
+
+  // time은 "HH:MM" 또는 ''/null(시각 없음). 성공하면 새 일정(복사본), 거부하면 null.
+  function addEvent(date, time, title) {
+    ensureLoaded();
+    var t = cleanTitle(title);
+    if (t === null || !isDate(date)) return null;
+    if (time === '' || time === undefined) time = null;
+    if (time !== null && !isTime(time)) return null;
+    var ev = { id: newId(), date: date, time: time, title: t, createdAt: clock() };
+    insertEvent(ev);
+    save();
+    return copyEvent(ev);
+  }
+
+  // 삭제한 일정(복사본). 실행 취소는 restoreEvent()에.
+  function removeEvent(id) {
+    var ev = findEvent(id);
+    if (!ev) return null;
+    state.events.splice(state.events.indexOf(ev), 1);
+    save();
+    return copyEvent(ev);
+  }
+
+  function restoreEvent(ev) {
+    ensureLoaded();
+    var e = normalizeEvent(ev);
+    if (!e || findEvent(e.id)) return false;
+    insertEvent(e);
+    save();
+    return true;
+  }
+
+  // 그날 일정(정렬된 복사본)
+  function eventsOn(date) {
+    ensureLoaded();
+    return state.events.filter(function (e) { return e.date === date; }).map(copyEvent);
+  }
+
+  // 한 달(month는 1~12)의 일정 { "YYYY-MM-DD": [일정…] }와 개수
+  function eventsInMonth(year, month) {
+    ensureLoaded();
+    var prefix = year + '-' + pad2(month) + '-', byDate = {}, total = 0;
+    state.events.forEach(function (e) {
+      if (e.date.indexOf(prefix) !== 0) return;
+      (byDate[e.date] = byDate[e.date] || []).push(copyEvent(e));
+      total++;
+    });
+    return { byDate: byDate, total: total };
+  }
+
+  function eventCount() {
+    ensureLoaded();
+    return state.events.length;
+  }
+
   /* ---------- 매일 확인 알림 ---------- */
 
   // 미확인 상태(순수 함수): 로컬 시각이 reminderTime 이후이고 lastAckDate가 오늘이 아님.
@@ -366,7 +481,7 @@ var Store = (function () {
     return state.todos.length;
   }
 
-  // 전체 데이터를 JSON 문자열로(최상위 { version, todos, settings } 그대로)
+  // 전체 데이터를 JSON 문자열로(최상위 { version, todos, events, settings } 그대로)
   function exportData() {
     ensureLoaded();
     return JSON.stringify(state, null, 2);
@@ -401,6 +516,25 @@ var Store = (function () {
       if (t.done && !isNum(t.doneAt)) return fail(n + 'doneAt이 숫자가 아닙니다(완료 항목)');
       if (!t.done && t.doneAt !== null) return fail(n + 'doneAt이 null이 아닙니다(미완료 항목)');
     }
+    // events는 없어도 된다(일정 기능 전에 만든 백업)
+    if (d.events !== undefined) {
+      if (!Array.isArray(d.events)) return fail('events 항목이 배열이 아닙니다');
+      var seenEv = {};
+      for (var j = 0; j < d.events.length; j++) {
+        var e = d.events[j], en = (j + 1) + '번째 일정의 ';
+        if (!isObj(e)) return fail((j + 1) + '번째 일정이 객체가 아닙니다');
+        if (typeof e.id !== 'string' || !e.id) return fail(en + 'id가 없거나 문자열이 아닙니다');
+        if (Object.prototype.hasOwnProperty.call(seenEv, e.id)) return fail(en + 'id가 중복되었습니다');
+        seenEv[e.id] = true;
+        if (!isDate(e.date)) return fail(en + 'date가 올바른 날짜(YYYY-MM-DD)가 아닙니다');
+        if (e.time !== null && !isTime(e.time)) return fail(en + 'time이 HH:MM 또는 null이 아닙니다');
+        if (typeof e.title !== 'string') return fail(en + 'title이 없거나 문자열이 아닙니다');
+        var elen = e.title.trim().length;
+        if (elen < 1) return fail(en + 'title이 비어 있습니다');
+        if (elen > 100) return fail(en + 'title이 100자를 넘습니다(' + elen + '자)');
+        if (!isNum(e.createdAt)) return fail(en + 'createdAt이 없거나 숫자가 아닙니다');
+      }
+    }
     if (d.settings !== undefined && !isObj(d.settings)) return fail('settings 항목이 객체가 아닙니다');
     return { ok: true };
   }
@@ -429,13 +563,15 @@ var Store = (function () {
     }
     // 백업에 settings가 없으면 현재 설정을 유지
     if (!isObj(data.settings)) res.state.settings = prev.settings;
+    // 일정 기능 전에 만든 백업(events 없음)이면 현재 일정을 유지
+    if (!Array.isArray(data.events)) res.state.events = prev.events;
     state = res.state;
     if (!save()) {
       state = prev;
       return { ok: false, error: '저장하지 못해 가져오기를 취소했습니다(저장 공간 확인)' };
     }
     var purged = purgeOld();
-    return { ok: true, total: state.todos.length, purged: purged };
+    return { ok: true, total: state.todos.length, events: state.events.length, purged: purged };
   }
 
   // 테스트용: 저장 키와 시계를 바꾼다(null이면 기본값). 다음 접근 때 새로 불러온다.
@@ -460,8 +596,10 @@ var Store = (function () {
     acknowledge: acknowledge, markNotified: markNotified, setReminderTime: setReminderTime,
     todoCount: todoCount, exportData: exportData, backupFileName: backupFileName,
     validateBackup: validateBackup, parseBackup: parseBackup, importBackup: importBackup,
+    addEvent: addEvent, removeEvent: removeEvent, restoreEvent: restoreEvent,
+    eventsOn: eventsOn, eventsInMonth: eventsInMonth, eventCount: eventCount,
     getSettings: getSettings, setActiveTab: setActiveTab, saveOk: function () { return lastSaveOk; },
-    dateKey: dateKey, newId: newId, configure: configure
+    dateKey: dateKey, isDate: isDate, newId: newId, configure: configure
   };
 })();
 
@@ -506,7 +644,7 @@ var Store = (function () {
   var DAY_CHECK_MS = 60 * 1000;
 
   var editingId = null;     // 편집 중인 행(한 번에 하나)
-  var lastDeleted = null;   // 실행 취소 대상(마지막 삭제만)
+  var lastDeleted = null;   // 실행 취소 대상(마지막 삭제만): { kind: 'todo'|'event', item }
   var toastTimer = null;
   var warned = false;
 
@@ -845,7 +983,7 @@ var Store = (function () {
     var removed = Store.remove(id);
     if (!removed) return;
     afterChange();
-    showToast(removed);
+    showToast('todo', removed);
     // 키보드 흐름 유지: 그 자리에 온 다음(없으면 이전) 행의 삭제 버튼으로
     var rows = list.children;
     var next = rows[idx] || rows[idx - 1];
@@ -853,8 +991,8 @@ var Store = (function () {
     else input.focus();
   }
 
-  function showToast(removed) {
-    lastDeleted = removed;
+  function showToast(kind, removed) {
+    lastDeleted = { kind: kind, item: removed };
     clearTimeout(toastTimer);
     var box = el('div', 'toast__box');
     var msg = el('span');
@@ -879,11 +1017,13 @@ var Store = (function () {
 
   // 마지막 삭제를 되돌린다(토스트가 떠 있는 5초 동안만)
   function undoDelete() {
-    var t = lastDeleted;
+    var d = lastDeleted;
     hideToast();
-    if (t && Store.restore(t)) {
+    if (!d) return;
+    if (d.kind === 'event') { undoEventDelete(d.item); return; }
+    if (Store.restore(d.item)) {
       afterChange();
-      focusRow(t.id, 'check');
+      focusRow(d.item.id, 'check');
     }
   }
 
@@ -956,6 +1096,220 @@ var Store = (function () {
     }, 0);
   });
 
+  /* ---------- 일정 (월 달력) ---------- */
+
+  var calBody = document.getElementById('cal-body');
+  var calMonthEl = document.getElementById('cal-month');
+  var monthCountEl = document.getElementById('month-count');
+  var dayTitleEl = document.getElementById('day-title');
+  var eventList = document.getElementById('event-list');
+  var eventEmpty = document.getElementById('event-empty');
+  var eventForm = document.getElementById('event-form');
+  var eventTime = document.getElementById('event-time');
+  var eventTitle = document.getElementById('event-title');
+  var CELL_EVENTS = 2;   // 칸 안에 보여 줄 일정 수(나머지는 +N)
+
+  var selDate = Store.dateKey();       // 선택한 날짜(저장하지 않음, 시작은 오늘)
+  var calYear, calMonth;               // 보고 있는 달(calMonth는 1~12)
+
+  function keyToDate(k) { return new Date(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10))); }
+  function addDays(k, n) { var d = keyToDate(k); d.setDate(d.getDate() + n); return Store.dateKey(d); }
+  // 한 달 이동. 그 달에 없는 날(31일 등)은 말일로.
+  function addMonths(k, n) {
+    var d = keyToDate(k), day = d.getDate();
+    var t = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    var last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    t.setDate(Math.min(day, last));
+    return Store.dateKey(t);
+  }
+  function showMonthOf(k) { calYear = Number(k.slice(0, 4)); calMonth = Number(k.slice(5, 7)); }
+  function dayLabel(k) {
+    var d = keyToDate(k);
+    return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WEEKDAY[d.getDay()] + ')';
+  }
+  function eventText(e) { return (e.time ? e.time + ' ' : '') + e.title; }
+
+  function dayCell(d, inMonth, today, evs) {
+    var k = Store.dateKey(d), dow = d.getDay();
+    var td = el('td', 'cal__cell');
+    td.setAttribute('role', 'gridcell');
+    td.setAttribute('aria-selected', k === selDate ? 'true' : 'false');
+    var b = el('button', 'cal__day' + (inMonth ? '' : ' is-other') + (dow === 0 ? ' is-sun' : dow === 6 ? ' is-sat' : '') +
+      (k === today ? ' is-today' : '') + (k === selDate ? ' is-selected' : ''));
+    b.type = 'button';
+    b.dataset.date = k;
+    b.tabIndex = k === selDate ? 0 : -1;
+    if (k === today) b.setAttribute('aria-current', 'date');
+    b.setAttribute('aria-label', (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + WEEKDAY[dow] + '요일' +
+      (k === today ? ', 오늘' : '') + (evs.length ? ', 일정 ' + evs.length + '개' : ''));
+    var num = el('span', 'cal__num');
+    num.textContent = d.getDate();
+    num.setAttribute('aria-hidden', 'true');
+    b.appendChild(num);
+    if (evs.length) {
+      var box = el('span', 'cal__events');
+      box.setAttribute('aria-hidden', 'true');
+      evs.slice(0, CELL_EVENTS).forEach(function (e) {
+        var s = el('span', 'cal__ev');
+        s.textContent = eventText(e);
+        box.appendChild(s);
+      });
+      if (evs.length > CELL_EVENTS) {
+        var more = el('span', 'cal__more');
+        more.textContent = '+' + (evs.length - CELL_EVENTS);
+        box.appendChild(more);
+      }
+      var dot = el('span', 'cal__badge');   // 좁은 화면에서는 제목 대신 개수
+      dot.setAttribute('aria-hidden', 'true');
+      dot.textContent = evs.length;
+      b.appendChild(box);
+      b.appendChild(dot);
+    }
+    td.appendChild(b);
+    return td;
+  }
+
+  // 일정 영역 전체를 다시 그린다. focusDay면 선택한 날짜 칸으로 포커스.
+  function renderSchedule(focusDay) {
+    var today = Store.dateKey();
+    var first = new Date(calYear, calMonth - 1, 1);
+    var daysIn = new Date(calYear, calMonth, 0).getDate();
+    var weeks = Math.ceil((first.getDay() + daysIn) / 7);
+    var cur = Store.eventsInMonth(calYear, calMonth);
+    // 앞뒤 달 날짜 칸의 일정도 보이게
+    var prev = calMonth === 1 ? Store.eventsInMonth(calYear - 1, 12) : Store.eventsInMonth(calYear, calMonth - 1);
+    var next = calMonth === 12 ? Store.eventsInMonth(calYear + 1, 1) : Store.eventsInMonth(calYear, calMonth + 1);
+
+    calMonthEl.textContent = calYear + '년 ' + calMonth + '월';
+    monthCountEl.textContent = '이번 달 ' + cur.total + '개';
+    var frag = document.createDocumentFragment();
+    var d = new Date(calYear, calMonth - 1, 1 - first.getDay());
+    for (var w = 0; w < weeks; w++) {
+      var tr = el('tr');
+      for (var i = 0; i < 7; i++) {
+        var k = Store.dateKey(d), inMonth = d.getMonth() === calMonth - 1;
+        var src = inMonth ? cur : (d < first ? prev : next);
+        tr.appendChild(dayCell(new Date(d.getTime()), inMonth, today, src.byDate[k] || []));
+        d.setDate(d.getDate() + 1);
+      }
+      frag.appendChild(tr);
+    }
+    calBody.textContent = '';
+    calBody.appendChild(frag);
+
+    // 선택한 날의 일정
+    dayTitleEl.textContent = dayLabel(selDate);
+    if (selDate === today) {
+      var tag = el('span', 'day__today');
+      tag.textContent = '오늘';
+      dayTitleEl.appendChild(tag);
+    }
+    var evs = Store.eventsOn(selDate);
+    var lf = document.createDocumentFragment();
+    evs.forEach(function (e) {
+      var li = el('li', 'event');
+      li.dataset.id = e.id;
+      var t = el('span', 'event__time' + (e.time ? '' : ' is-allday'));
+      t.textContent = e.time || '종일';
+      var title = el('span', 'event__title');
+      title.textContent = e.title;
+      var del = el('button', 'todo__delete');
+      del.type = 'button';
+      del.dataset.role = 'delete-event';
+      del.setAttribute('aria-label', '일정 ‘' + e.title + '’ 삭제');
+      del.textContent = '×';
+      li.appendChild(t);
+      li.appendChild(title);
+      li.appendChild(del);
+      lf.appendChild(li);
+    });
+    eventList.textContent = '';
+    eventList.appendChild(lf);
+    eventEmpty.hidden = evs.length > 0;
+    eventTitle.setAttribute('aria-label', dayLabel(selDate) + ' 일정 내용');
+
+    if (focusDay) {
+      var btn = calBody.querySelector('[data-date="' + selDate + '"]');
+      if (btn) btn.focus();
+    }
+  }
+
+  function selectDate(k, focusDay) {
+    selDate = k;
+    showMonthOf(k);
+    renderSchedule(focusDay);
+  }
+
+  function afterEventChange() {
+    if (!Store.saveOk()) warnOnce();
+    renderSchedule(false);
+  }
+
+  calBody.addEventListener('click', function (e) {
+    var b = e.target.closest('.cal__day');
+    if (b) selectDate(b.dataset.date, true);
+  });
+
+  // 달력 키보드: 화살표 = 하루/한 주, Home/End = 주의 처음/끝, PageUp/PageDown = 한 달
+  calBody.addEventListener('keydown', function (e) {
+    var b = e.target.closest('.cal__day');
+    if (!b || e.ctrlKey || e.metaKey || e.altKey) return;
+    var k = selDate, dow = keyToDate(k).getDay(), n = null;
+    if (e.key === 'ArrowLeft') n = addDays(k, -1);
+    else if (e.key === 'ArrowRight') n = addDays(k, 1);
+    else if (e.key === 'ArrowUp') n = addDays(k, -7);
+    else if (e.key === 'ArrowDown') n = addDays(k, 7);
+    else if (e.key === 'Home') n = addDays(k, -dow);
+    else if (e.key === 'End') n = addDays(k, 6 - dow);
+    else if (e.key === 'PageUp') n = addMonths(k, e.shiftKey ? -12 : -1);
+    else if (e.key === 'PageDown') n = addMonths(k, e.shiftKey ? 12 : 1);
+    if (n === null) return;
+    e.preventDefault();
+    selectDate(n, true);
+  });
+
+  document.getElementById('cal-prev').addEventListener('click', function () { selectDate(addMonths(selDate, -1), false); });
+  document.getElementById('cal-next').addEventListener('click', function () { selectDate(addMonths(selDate, 1), false); });
+  document.getElementById('cal-today').addEventListener('click', function () { selectDate(Store.dateKey(), true); });
+
+  eventForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var ev = Store.addEvent(selDate, eventTime.value, eventTitle.value);
+    if (!ev) {
+      if (!eventTitle.value.trim()) eventTitle.value = '';
+      eventTitle.focus();
+      return;
+    }
+    eventTitle.value = '';
+    eventTime.value = '';
+    afterEventChange();
+    eventTitle.focus();
+  });
+
+  eventList.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-role="delete-event"]');
+    var li = b && b.closest('li[data-id]');
+    if (!li) return;
+    var rows = Array.prototype.slice.call(eventList.children);
+    var idx = rows.indexOf(li);
+    var removed = Store.removeEvent(li.dataset.id);
+    if (!removed) return;
+    afterEventChange();
+    showToast('event', removed);
+    var next = eventList.children[idx] || eventList.children[idx - 1];
+    if (next) next.querySelector('[data-role="delete-event"]').focus();
+    else eventTitle.focus();
+  });
+
+  function undoEventDelete(ev) {
+    if (!Store.restoreEvent(ev)) return;
+    selDate = ev.date;
+    showMonthOf(ev.date);
+    afterEventChange();
+    var li = eventList.querySelector('li[data-id="' + ev.id + '"]');
+    if (li) li.querySelector('[data-role="delete-event"]').focus();
+  }
+
   /* ---------- 백업 내보내기/가져오기 ---------- */
 
   var backupMsg = document.getElementById('backup-msg');
@@ -1019,7 +1373,10 @@ var Store = (function () {
       showBackupMsg('가져올 수 없습니다: ' + r.error + '. 기존 데이터는 그대로입니다.', true);
       return;
     }
-    var msg = '현재 할 일 ' + Store.todoCount() + '개를 백업의 ' + r.data.todos.length + '개로 바꿉니다. 계속할까요?';
+    var hasEvents = Array.isArray(r.data.events);
+    var msg = '현재 할 일 ' + Store.todoCount() + '개를 백업의 ' + r.data.todos.length + '개로' +
+      (hasEvents ? ', 일정 ' + Store.eventCount() + '개를 백업의 ' + r.data.events.length + '개로' : '') +
+      ' 바꿉니다.' + (hasEvents ? '' : ' (백업에 일정이 없어 현재 일정은 그대로 둡니다)') + ' 계속할까요?';
     if (!window.confirm(msg)) {
       showBackupMsg('가져오기를 취소했습니다. 기존 데이터는 그대로입니다.');
       return;
@@ -1034,8 +1391,9 @@ var Store = (function () {
     hideToast();   // 이전 데이터 기준의 실행 취소는 무효
     syncSettingsUi();
     render();
+    renderSchedule(false);
     checkReminder();
-    showBackupMsg('가져왔습니다: 할 일 ' + res.total + '개' +
+    showBackupMsg('가져왔습니다: 할 일 ' + res.total + '개, 일정 ' + res.events + '개' +
       (res.purged ? ' (완료 후 7일이 지난 ' + res.purged + '개는 정리했습니다)' : ''));
   }
 
@@ -1098,7 +1456,7 @@ var Store = (function () {
 
   // 날짜가 바뀌었으면 Store가 purgeOld()를 하고, 여기서 다시 그린다.
   function checkDay() {
-    if (Store.checkDay()) render();
+    if (Store.checkDay()) { render(); renderSchedule(false); }
   }
   setInterval(checkDay, DAY_CHECK_MS);
   document.addEventListener('visibilitychange', function () {
@@ -1162,5 +1520,7 @@ var Store = (function () {
   Store.load();
   syncSettingsUi();
   render();
+  showMonthOf(selDate);
+  renderSchedule(false);
   checkReminder();
 })();
