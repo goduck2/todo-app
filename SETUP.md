@@ -2,7 +2,7 @@
 
 이 앱은 **열려 있을 때** 알림 시각(기본 08:00)이 지났고 오늘 아직 [확인]을 누르지 않았으면 맨 위에 배너를 보여 주고, 탭 제목을 "(확인 필요) 할 일"로 바꿉니다. 그래서 매일 08:00에 PC나 휴대폰이 앱을 자동으로 열어 주면 확인을 놓치지 않습니다.
 
-- 아래 `<앱 주소>`는 **8단계 배포 후 실제 주소로 바꿔 넣습니다.** 명령어에 넣을 때는 `<`와 `>`까지 함께 지웁니다.
+- 앱 주소: `https://goduck2.github.io/todo-app/` (GitHub Pages). 아래 명령과 설정에 이미 넣어 두었습니다.
 - 앱 안의 알림 시각(설정 > 알림 시각)을 바꾸면 아래 예약 시각도 같이 맞춥니다.
 - 메뉴 이름은 OS 버전, 언어, 제조사에 따라 다를 수 있습니다. 아래에서 **확인하지 못한 이름은 그렇게 표시**했으니, 화면에 보이는 비슷한 항목을 찾아 쓰세요.
 - 회사 PC는 앱을 켜 두면 배너로 확인합니다.
@@ -22,9 +22,9 @@ PC가 켜져 있고 로그인한 상태여야 창이 열립니다.
 5. **동작** 탭 > **새로 만들기…**: 동작은 **프로그램 시작**.
    - 프로그램/스크립트: `cmd.exe`
    - 인수 추가: 아래 둘 중 하나
-     - Edge로 앱 창 열기: `/c start msedge --app=<앱 주소>`
-     - Chrome으로 앱 창 열기: `/c start chrome --app=<앱 주소>`
-   - (`--app=` 은 주소창 없는 앱 창으로 엽니다. 그냥 기본 브라우저 탭으로 열고 싶다면 `/c start "" "<앱 주소>"` 를 씁니다.)
+     - Edge로 앱 창 열기: `/c start msedge --app=https://goduck2.github.io/todo-app/`
+     - Chrome으로 앱 창 열기: `/c start chrome --app=https://goduck2.github.io/todo-app/`
+   - (`--app=` 은 주소창 없는 앱 창으로 엽니다. 그냥 기본 브라우저 탭으로 열고 싶다면 `/c start "" "https://goduck2.github.io/todo-app/"` 를 씁니다.)
 6. **설정** 탭: **예약된 시간을 놓친 경우 가능한 한 빨리 실행**에 해당하는 항목을 켭니다. (PC가 08:00에 꺼져 있었다면 켜지고 로그인한 뒤 실행됩니다. 정확한 문구는 Windows 버전마다 조금 다를 수 있습니다.)
 7. **조건** 탭: 노트북이면 전원/배터리 관련 항목(전원 연결 시에만 시작 등)이 켜져 있는지 확인하고, 배터리로도 실행되게 하려면 끕니다. 절전 상태에서 깨워서 실행할지에 관한 항목도 이 탭에 있습니다(문구는 버전마다 다름).
 8. **확인**을 누릅니다.
@@ -37,13 +37,13 @@ PC가 켜져 있고 로그인한 상태여야 창이 열립니다.
 **(가) schtasks 한 줄** — 작업을 만들 수 있지만, schtasks에는 "놓친 작업 가능한 한 빨리 실행" 옵션이 **없습니다.** 만든 뒤 위 6번 항목을 화면에서 켜 주세요.
 
 ```bat
-schtasks /Create /TN "할 일 앱 08:00" /SC DAILY /ST 08:00 /TR "cmd.exe /c start msedge --app=<앱 주소>" /F
+schtasks /Create /TN "할 일 앱 08:00" /SC DAILY /ST 08:00 /TR "cmd.exe /c start msedge --app=https://goduck2.github.io/todo-app/" /F
 ```
 
 **(나) PowerShell 한 줄** — "놓친 작업 가능한 한 빨리 실행"까지 한 번에 켭니다.
 
 ```powershell
-Register-ScheduledTask -TaskName "할 일 앱 08:00" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c start msedge --app=<앱 주소>") -Trigger (New-ScheduledTaskTrigger -Daily -At 08:00) -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
+Register-ScheduledTask -TaskName "할 일 앱 08:00" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c start msedge --app=https://goduck2.github.io/todo-app/") -Trigger (New-ScheduledTaskTrigger -Daily -At 08:00) -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
 ```
 
 작업 삭제: `schtasks /Delete /TN "할 일 앱 08:00" /F`
@@ -57,7 +57,7 @@ Register-ScheduledTask -TaskName "할 일 앱 08:00" -Action (New-ScheduledTaskA
 1. **단축어** 앱을 엽니다.
 2. 아래쪽 **자동화** 탭 > 새 자동화(+)를 누릅니다.
 3. **시간**(특정 시각) 항목을 고르고, 시각을 `08:00`, 반복을 **매일**로 합니다.
-4. 동작 추가에서 **URL 열기**(영문 이름 *Open URLs*) 계열 동작을 고르고 주소 칸에 `<앱 주소>`를 입력합니다.
+4. 동작 추가에서 **URL 열기**(영문 이름 *Open URLs*) 계열 동작을 고르고 주소 칸에 `https://goduck2.github.io/todo-app/`를 입력합니다.
 5. **다음**을 누르고 **즉시 실행**을 켭니다(실행 전에 묻는 항목은 끕니다). 완료.
 
 주의:
