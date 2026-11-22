@@ -17,7 +17,7 @@ PC가 켜져 있고 로그인한 상태여야 창이 열립니다.
 
 1. 시작 메뉴에서 **작업 스케줄러**를 검색해 실행합니다.
 2. 오른쪽 **작업 만들기…** 를 누릅니다. ("기본 작업 만들기"는 아래 옵션이 없어서 쓰지 않습니다.)
-3. **일반** 탭: 이름에 `할 일 앱 08:00`을 입력합니다. **사용자가 로그온할 때만 실행**을 선택합니다(창을 화면에 띄워야 하므로).
+3. **일반** 탭: 이름에 `할 일 앱 08시`를 입력합니다(작업 이름에는 `:`를 쓸 수 없습니다). **사용자가 로그온할 때만 실행**을 선택합니다(창을 화면에 띄워야 하므로).
 4. **트리거** 탭 > **새로 만들기…**: 작업 시작은 **일정에 따라**, **매일**, 시작 시각 `08:00:00`, 1일마다. 확인.
 5. **동작** 탭 > **새로 만들기…**: 동작은 **프로그램 시작**.
    - 프로그램/스크립트: `cmd.exe`
@@ -32,21 +32,21 @@ PC가 켜져 있고 로그인한 상태여야 창이 열립니다.
 
 ### 방법 2. 명령어로 만들기
 
-아래 둘 중 하나를 **일반 사용자 권한**의 PowerShell 또는 명령 프롬프트에서 실행합니다. (이 문서를 쓴 환경은 Linux라서 아래 명령을 Windows에서 직접 실행해 보지는 못했습니다. 오류가 나면 위의 화면 방법을 쓰세요.)
+아래 둘 중 하나를 **일반 사용자 권한**의 PowerShell 또는 명령 프롬프트에서 실행합니다. ((나) PowerShell 명령은 Windows 10에서 실행해 등록되는 것을 확인했습니다. (가) schtasks는 실행해 보지 못했습니다.)
 
 **(가) schtasks 한 줄** — 작업을 만들 수 있지만, schtasks에는 "놓친 작업 가능한 한 빨리 실행" 옵션이 **없습니다.** 만든 뒤 위 6번 항목을 화면에서 켜 주세요.
 
 ```bat
-schtasks /Create /TN "할 일 앱 08:00" /SC DAILY /ST 08:00 /TR "cmd.exe /c start msedge --app=https://goduck2.github.io/todo-app/" /F
+schtasks /Create /TN "할 일 앱 08시" /SC DAILY /ST 08:00 /TR "cmd.exe /c start msedge --app=https://goduck2.github.io/todo-app/" /F
 ```
 
 **(나) PowerShell 한 줄** — "놓친 작업 가능한 한 빨리 실행"까지 한 번에 켭니다.
 
 ```powershell
-Register-ScheduledTask -TaskName "할 일 앱 08:00" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c start msedge --app=https://goduck2.github.io/todo-app/") -Trigger (New-ScheduledTaskTrigger -Daily -At 08:00) -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
+Register-ScheduledTask -TaskName "할 일 앱 08시" -Action (New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c start msedge --app=https://goduck2.github.io/todo-app/") -Trigger (New-ScheduledTaskTrigger -Daily -At 08:00) -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
 ```
 
-작업 삭제: `schtasks /Delete /TN "할 일 앱 08:00" /F`
+작업 삭제: `schtasks /Delete /TN "할 일 앱 08시" /F`
 
 설치한 앱(PWA)을 앱 ID로 직접 실행하는 방법은 확인하지 못해 적지 않았습니다. 이미 설치한 앱의 바로가기 파일이 있다면 `cmd.exe` 인수에 `/c start "" "<바로가기 경로>"` 를 써서 열 수도 있습니다.
 
