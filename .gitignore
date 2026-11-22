@@ -1,0 +1,6 @@
+# 내보내기한 백업에는 개인 할 일이 들어 있으므로 저장소에 올리지 않는다
+todo-backup-*.json
+
+# OS 잡파일
+.DS_Store
+Thumbs.db

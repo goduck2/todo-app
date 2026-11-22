@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>할 일 관리</title>
+  <meta name="theme-color" content="#2459d6">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="할 일">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="app">
+    <!-- 1. 알림 배너 (확인 전에는 닫히지 않음) -->
+    <div class="banner" id="reminder-banner" role="status" hidden>
+      <p class="banner__text">오늘 할 일 <strong id="reminder-count">0</strong>개를 확인하세요</p>
+      <button type="button" class="btn btn--primary" id="reminder-ack">확인</button>
+    </div>
+
+    <!-- 새 버전 안내 (서비스 워커가 있는 환경에서만 나타남) -->
+    <div class="banner banner--update" id="update-banner" role="status" hidden>
+      <p class="banner__text">새 버전이 있습니다</p>
+      <button type="button" class="btn btn--primary" id="update-reload">새로고침</button>
+    </div>
+
+    <!-- 저장 실패 경고 -->
+    <p class="warning" id="storage-warning" role="alert" hidden>저장할 수 없습니다. 사생활 모드인지 확인하세요</p>
+
+    <!-- 2. 진행률 -->
+    <section class="progress" aria-labelledby="progress-title">
+      <h1 id="progress-title" class="progress__date">
+        <time datetime="2026-11-22">2026년 11월 22일 (일)</time>
+      </h1>
+      <p class="progress__summary" id="progress-summary">
+        <span class="progress__scope" id="progress-scope">전체</span>
+        <span id="progress-text">완료 0 / 0 (0%)</span>
+      </p>
+      <progress class="progress__bar" id="progress-bar" value="0" max="100" aria-label="전체 진행률">0%</progress>
+      <p class="progress__done" id="progress-done" role="status"></p>
+    </section>
+
+    <!-- 3. 카테고리 탭 -->
+    <div class="tabs" id="tabs" role="tablist" aria-label="카테고리 필터">
+      <button type="button" class="tab" role="tab" id="tab-all" data-tab="all" aria-selected="true" tabindex="0" aria-controls="todo-list">
+        전체 <span class="tab__count">0</span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-work" data-tab="work" aria-selected="false" tabindex="-1" aria-controls="todo-list">
+        업무 <span class="tab__count">0</span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-personal" data-tab="personal" aria-selected="false" tabindex="-1" aria-controls="todo-list">
+        개인 <span class="tab__count">0</span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-study" data-tab="study" aria-selected="false" tabindex="-1" aria-controls="todo-list">
+        공부 <span class="tab__count">0</span>
+      </button>
+    </div>
+
+    <!-- 5. 할 일 목록 (항목은 app.js의 render()가 그림) -->
+    <ul class="todo-list" id="todo-list" role="tabpanel" aria-labelledby="tab-all"></ul>
+    <p class="empty" id="empty-state" hidden>오늘 할 일을 추가해 보세요</p>
+
+    <!-- 4. 입력 줄 (모바일에서는 하단 고정) -->
+    <form class="add-form" id="add-form" autocomplete="off" novalidate>
+      <label class="add-form__title" for="new-title">
+        <span class="visually-hidden">새 할 일</span>
+        <input type="text" id="new-title" name="title" maxlength="100" required placeholder="새 할 일을 입력하세요">
+      </label>
+      <label class="add-form__category" for="new-category">
+        <span class="visually-hidden">카테고리</span>
+        <select id="new-category" name="category">
+          <option value="work">업무</option>
+          <option value="personal">개인</option>
+          <option value="study">공부</option>
+        </select>
+      </label>
+      <button type="submit" class="btn btn--primary">추가</button>
+    </form>
+
+    <!-- 설정 -->
+    <details class="settings" id="settings">
+      <summary>설정</summary>
+      <div class="settings__body">
+        <label class="settings__row" for="reminder-time">
+          <span>알림 시각 (매일)</span>
+          <input type="time" id="reminder-time" value="08:00">
+        </label>
+        <div class="settings__row" id="notify-row" hidden>
+          <span>시스템 알림</span>
+          <button type="button" class="btn" id="notify-btn">알림 켜기</button>
+        </div>
+        <p class="settings__status" id="notify-status"></p>
+        <div class="settings__row settings__row--backup">
+          <span>백업</span>
+          <span class="settings__buttons">
+            <button type="button" class="btn" id="export-btn">내보내기</button>
+            <button type="button" class="btn" id="import-btn">가져오기</button>
+            <input type="file" id="import-file" accept=".json,application/json" hidden>
+          </span>
+        </div>
+        <p class="settings__status" id="backup-msg" aria-live="polite"></p>
+      </div>
+    </details>
+  </main>
+
+  <!-- 삭제 실행 취소 토스트 (항상 존재하는 live 영역) -->
+  <div class="toast" id="toast" aria-live="polite"></div>
+</body>
+</html>

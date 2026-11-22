@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store 테스트</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Malgun Gothic", sans-serif; margin: 16px; line-height: 1.5; }
+    #summary { font-size: 1.2rem; font-weight: 700; }
+    #summary.pass { color: #14602a; }
+    #summary.fail { color: #c62828; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 4px 0; }
+    .pass-mark { color: #14602a; font-weight: 700; }
+    .fail-mark { color: #c62828; font-weight: 700; }
+    .msg { color: #c62828; margin-left: 1.5em; font-size: 0.9rem; white-space: pre-wrap; }
+  </style>
+  <!-- 화면 요소(#todo-list)가 없으므로 app.js는 Store만 정의한다 -->
+  <script src="app.js"></script>
+</head>
+<body>
+  <h1>Store 테스트</h1>
+  <p id="summary">실행 중…</p>
+  <ul id="results"></ul>
+
+  <script>
+    var TEST_KEY = 'todo-app-test-v1';          // 실제 키("todo-app-v1")와 분리
+    var CORRUPT_KEY = TEST_KEY + '-corrupt';
+    var BEFORE_KEY = TEST_KEY + '-before-import';
+    var REAL_KEY = 'todo-app-v1';
+    var realBefore = localStorage.getItem(REAL_KEY);
+    var realBeforeImport = localStorage.getItem(REAL_KEY + '-before-import');
+
+    var results = [];
+    function test(name, fn) {
+      try { reset(); fn(); results.push({ name: name, ok: true }); }
+      catch (e) { results.push({ name: name, ok: false, msg: e.message }); }
+    }
+    function ok(cond, msg) { if (!cond) throw new Error(msg || '조건 불일치'); }
+    function eq(actual, expected, msg) {
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        throw new Error((msg ? msg + ': ' : '') + '기대 ' + JSON.stringify(expected) + ' / 실제 ' + JSON.stringify(actual));
+      }
+    }
+    function reset() {
+      Store.configure({ key: TEST_KEY, clock: null });
+      localStorage.removeItem(TEST_KEY);
+      localStorage.removeItem(CORRUPT_KEY);
+      localStorage.removeItem(BEFORE_KEY);
+      Store.load();
+    }
+    // 로컬 시간 기준 ms
+    function L(y, m, d, h, mi, s, ms) { return new Date(y, m - 1, d, h || 0, mi || 0, s || 0, ms || 0).getTime(); }
+    function setNow(ms) { Store.configure({ clock: function () { return ms; } }); }
+    // 저장소를 직접 써서 상태를 만든 뒤 새로 load
+    function seed(obj) { localStorage.setItem(TEST_KEY, JSON.stringify(obj)); Store.load(); }
+    function todo(id, o) {
+      return { id: id, title: o.title || id, category: o.category || 'work', done: !!o.done,
+        createdAt: o.createdAt, doneAt: o.doneAt === undefined ? null : o.doneAt, updatedAt: o.createdAt };
+    }
+    var DAY = 24 * 60 * 60 * 1000;
+
+    /* ---- 추가 ---- */
+    test('add: 앞뒤 공백 제거, 필드 구성, lastCategory 갱신', function () {
+      setNow(1000);
+      var t = Store.add('  우유 사기  ', 'personal');
+      ok(t, 'add가 null');
+      eq(t.title, '우유 사기');
+      eq([t.category, t.done, t.doneAt, t.createdAt, t.updatedAt], ['personal', false, null, 1000, 1000]);
+      ok(typeof t.id === 'string' && t.id.length > 0, 'id 없음');
+      eq(Store.getSettings().lastCategory, 'personal');
+    });
+    test('add: 빈 제목·공백만 거부', function () {
+      eq(Store.add('', 'work'), null);
+      eq(Store.add('   ', 'work'), null);
+      eq(Store.add(null, 'work'), null);
+      eq(Store.todayList().length, 0);
+    });
+    test('add: 101자 거부, 100자 허용', function () {
+      eq(Store.add(new Array(102).join('가'), 'work'), null, '101자');
+      ok(Store.add(new Array(101).join('가'), 'work'), '100자는 허용');
+      eq(Store.todayList().length, 1);
+    });
+    test('add: 잘못된 카테고리 거부, 거부 시 lastCategory 불변', function () {
+      eq(Store.add('x', 'play'), null);
+      eq(Store.add('x'), null);
+      eq(Store.getSettings().lastCategory, 'work');
+    });
+
+    /* ---- 수정 ---- */
+    test('update: 제목·카테고리 변경, updatedAt 갱신', function () {
+      setNow(1000); var t = Store.add('a', 'work');
+      setNow(2000); var u = Store.update(t.id, { title: ' b ', category: 'study' });
+      eq([u.title, u.category, u.updatedAt, u.createdAt], ['b', 'study', 2000, 1000]);
+    });
+    test('update: 잘못된 값이면 아무것도 바꾸지 않음', function () {
+      var t = Store.add('a', 'work');
+      eq(Store.update(t.id, { title: '   ' }), null, '빈 제목');
+      eq(Store.update(t.id, { title: new Array(102).join('x') }), null, '101자');
+      eq(Store.update(t.id, { title: 'ok', category: 'nope' }), null, '잘못된 카테고리');
+      eq(Store.update('없는-id', { title: 'z' }), null, '없는 id');
+      var cur = Store.todayList()[0];
+      eq([cur.title, cur.category], ['a', 'work']);
+    });
+
+    /* ---- 삭제·복원 ---- */
+    test('remove + restore: 원래 자리로 복원', function () {
+      setNow(1000); var a = Store.add('a', 'work');
+      setNow(2000); var b = Store.add('b', 'work');
+      setNow(3000); var c = Store.add('c', 'work');
+      var removed = Store.remove(b.id);
+      eq(removed.id, b.id);
+      eq(Store.todayList().map(function (x) { return x.title; }), ['a', 'c']);
+      ok(Store.restore(removed), 'restore 실패');
+      eq(Store.todayList().map(function (x) { return x.title; }), ['a', 'b', 'c']);
+    });
+    test('remove: 없는 id는 null, restore: 중복·잘못된 항목 거부', function () {
+      var a = Store.add('a', 'work');
+      eq(Store.remove('없음'), null);
+      eq(Store.restore(a), false, '이미 존재');
+      eq(Store.restore({ id: 'x', title: '' }), false, '잘못된 항목');
+    });
+    test('remove한 완료 항목도 restore하면 완료 상태 유지', function () {
+      setNow(1000); var a = Store.add('a', 'work');
+      setNow(2000); Store.toggle(a.id);
+      var r = Store.remove(a.id);
+      Store.restore(r);
+      var cur = Store.todayList()[0];
+      eq([cur.done, cur.doneAt], [true, 2000]);
+    });
+
+    /* ---- 완료 토글 ---- */
+    test('toggle 왕복: done/doneAt/updatedAt', function () {
+      setNow(1000); var t = Store.add('a', 'work');
+      setNow(5000); var d = Store.toggle(t.id);
+      eq([d.done, d.doneAt, d.updatedAt], [true, 5000, 5000]);
+      setNow(9000); var u = Store.toggle(t.id);
+      eq([u.done, u.doneAt, u.updatedAt], [false, null, 9000]);
+      eq(Store.toggle('없음'), null);
+    });
+
+    /* ---- 저장·불러오기 ---- */
+    test('새로 load해도 데이터 유지', function () {
+      setNow(1000); var a = Store.add('a', 'study');
+      setNow(2000); Store.add('b', 'personal');
+      setNow(3000); Store.toggle(a.id);
+      var before = Store.todayList();
+      var settingsBefore = Store.getSettings();
+      Store.configure({ key: TEST_KEY });   // 메모리 상태 폐기
+      ok(Store.load() === true, 'load가 정상 아님');
+      eq(Store.todayList(), before);
+      eq(Store.getSettings(), settingsBefore);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).version, 1);
+    });
+    test('깨진 JSON: 기본값으로 시작, 원본은 corrupt 키에 보관', function () {
+      localStorage.setItem(TEST_KEY, '{broken json');
+      eq(Store.load(), false, '복구 표시');
+      eq(Store.todayList().length, 0);
+      eq(localStorage.getItem(CORRUPT_KEY), '{broken json');
+      ok(Store.add('복구 후 추가', 'work'), '복구 후 add 실패');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 1);
+      eq(localStorage.getItem(CORRUPT_KEY), '{broken json', '원본 유지');
+    });
+    test('형식이 틀린 JSON(배열 등)도 복구', function () {
+      localStorage.setItem(TEST_KEY, '[1,2,3]');
+      eq(Store.load(), false);
+      eq(localStorage.getItem(CORRUPT_KEY), '[1,2,3]');
+      eq(Store.todayList().length, 0);
+    });
+    test('일부 항목만 깨진 경우: 정상 항목은 살리고 원본 보관', function () {
+      var good = todo('g', { createdAt: 1000 });
+      var raw = JSON.stringify({ version: 1, todos: [good, { id: 'bad', title: '', category: 'work', createdAt: 1 }], settings: {} });
+      localStorage.setItem(TEST_KEY, raw);
+      eq(Store.load(), false);
+      eq(Store.todayList().map(function (x) { return x.id; }), ['g']);
+      eq(localStorage.getItem(CORRUPT_KEY), raw);
+    });
+    test('version 없음: migrate 후 version 1로 유지', function () {
+      localStorage.setItem(TEST_KEY, JSON.stringify({ todos: [todo('a', { createdAt: 1000 })] }));
+      eq(Store.load(), true);
+      eq(Store.todayList().length, 1);
+      Store.save();
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).version, 1);
+    });
+    test('미래 version: 데이터 덮어쓰기 전에 corrupt 키로 보관', function () {
+      var raw = JSON.stringify({ version: 2, todos: [todo('a', { createdAt: 1000 })], settings: {} });
+      localStorage.setItem(TEST_KEY, raw);
+      eq(Store.load(), false);
+      eq(localStorage.getItem(CORRUPT_KEY), raw);
+      eq(Store.todayList().length, 0);
+    });
+    test('저장 실패 시 예외 없이 false, 메모리 상태는 유지', function () {
+      var orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new Error('QuotaExceeded'); };
+      try {
+        var t = Store.add('a', 'work');
+        ok(t, '저장 실패여도 add는 메모리에 반영');
+        eq(Store.save(), false, 'save 반환값');
+        eq(Store.saveOk(), false, 'saveOk');
+        eq(Store.todayList().length, 1);
+      } finally { Storage.prototype.setItem = orig; }
+      eq(Store.save(), true, '복구 후 save');
+      eq(Store.saveOk(), true);
+    });
+
+    /* ---- 오래된 완료 항목 정리 ---- */
+    test('purgeOld: 8일 전 완료 삭제, 6일 전 완료·미완료는 유지', function () {
+      var now = L(2026, 11, 22, 12);
+      setNow(now);
+      seed({ version: 1, settings: {}, todos: [
+        todo('old8', { createdAt: now - 20 * DAY, done: true, doneAt: now - 8 * DAY }),
+        todo('keep6', { createdAt: now - 20 * DAY, done: true, doneAt: now - 6 * DAY }),
+        todo('open', { createdAt: now - 30 * DAY })
+      ] });
+      // load가 이미 한 번 정리했으므로 저장소 내용으로 확인
+      var ids = JSON.parse(localStorage.getItem(TEST_KEY)).todos.map(function (x) { return x.id; });
+      eq(ids.sort(), ['keep6', 'open']);   // old8만 삭제됨 (저장 순서는 생성순)
+    });
+    test('purgeOld(now): 삭제 개수 반환, 7일 경계, 저장 반영', function () {
+      var now = L(2026, 11, 22, 12);
+      setNow(now);
+      seed({ version: 1, settings: {}, todos: [
+        todo('a', { createdAt: 1, done: true, doneAt: now - 7 * DAY + 1 }),   // 7일이 되기 1ms 전
+        todo('b', { createdAt: 2, done: true, doneAt: now - 7 * DAY })        // 정확히 7일
+      ] });
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.map(function (x) { return x.id; }), ['a'], 'load 후');
+      eq(Store.purgeOld(now), 0);
+      eq(Store.purgeOld(now + 1), 1, '1ms 뒤 7일 경과');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 0, '저장 반영');
+    });
+
+    /* ---- 날짜 ---- */
+    test('dateKey: 자정 전후', function () {
+      eq(Store.dateKey(L(2026, 11, 22, 23, 59, 59, 999)), '2026-11-22');
+      eq(Store.dateKey(L(2026, 11, 23, 0, 0, 0, 0)), '2026-11-23');
+    });
+    test('dateKey: 월·연 경계와 0 채우기', function () {
+      eq(Store.dateKey(L(2026, 12, 31, 23, 59, 59, 999)), '2026-12-31');
+      eq(Store.dateKey(L(2027, 1, 1, 0, 0, 0, 0)), '2027-01-01');
+      eq(Store.dateKey(L(2026, 1, 5, 9)), '2026-01-05');
+    });
+    test('dateKey: 오전 일찍(UTC와 날짜가 어긋나는 시간대)도 로컬 날짜', function () {
+      [0, 1, 8, 9, 15, 23].forEach(function (h) {
+        eq(Store.dateKey(new Date(2026, 10, 22, h, 30)), '2026-11-22', h + '시 30분');
+      });
+    });
+    test('dateKey: Date 객체와 ms 모두 허용, 인자 없으면 현재 시각', function () {
+      var ms = L(2026, 3, 9, 10);
+      eq(Store.dateKey(new Date(ms)), Store.dateKey(ms));
+      setNow(L(2026, 7, 4, 12));
+      eq(Store.dateKey(), '2026-07-04');
+    });
+
+    /* ---- 오늘 할 일 ---- */
+    test('todayList: 미완료 전체 + 오늘 완료, 어제 완료는 제외', function () {
+      var now = L(2026, 11, 22, 15);
+      setNow(now);
+      seed({ version: 1, settings: {}, todos: [
+        todo('yDone', { createdAt: 1, done: true, doneAt: L(2026, 11, 21, 23, 59, 59, 999) }),
+        todo('tDone0', { createdAt: 2, done: true, doneAt: L(2026, 11, 22, 0, 0, 0, 0) }),
+        todo('oldOpen', { createdAt: 3 })
+      ] });
+      eq(Store.todayList().map(function (x) { return x.id; }), ['oldOpen', 'tDone0']);
+    });
+    test('todayList: 미완료는 생성순, 완료는 아래로', function () {
+      var now = L(2026, 11, 22, 15);
+      seed({ version: 1, settings: {}, todos: [
+        todo('d1', { createdAt: 100, done: true, doneAt: now - 1000 }),
+        todo('o2', { createdAt: 300 }),
+        todo('o1', { createdAt: 200 })
+      ] });
+      setNow(now);
+      eq(Store.todayList().map(function (x) { return x.id; }), ['o1', 'o2', 'd1']);
+    });
+    test('todayList: 자정이 지나면 어제 완료한 항목이 사라짐', function () {
+      setNow(L(2026, 11, 22, 23, 59, 0)); var t = Store.add('a', 'work'); Store.toggle(t.id);
+      eq(Store.todayList().length, 1);
+      setNow(L(2026, 11, 23, 0, 1, 0));
+      eq(Store.todayList().length, 0);
+    });
+
+    /* ---- 진행률 ---- */
+    test('progress: total 0이면 percent 0', function () {
+      eq(Store.progress(), { done: 0, total: 0, percent: 0 });
+      eq(Store.progress('work'), { done: 0, total: 0, percent: 0 });
+    });
+    test('progress: 전체·카테고리별·반올림', function () {
+      var a = Store.add('a', 'work'), b = Store.add('b', 'work'), c = Store.add('c', 'study');
+      Store.toggle(a.id);
+      eq(Store.progress(), { done: 1, total: 3, percent: 33 });
+      eq(Store.progress('work'), { done: 1, total: 2, percent: 50 });
+      eq(Store.progress('study'), { done: 0, total: 1, percent: 0 });
+      eq(Store.progress('personal'), { done: 0, total: 0, percent: 0 });
+      eq(Store.progress('all'), { done: 1, total: 3, percent: 33 }, '알 수 없는 값은 전체');
+      Store.toggle(b.id); Store.toggle(c.id);
+      eq(Store.progress().percent, 100);
+    });
+
+    /* ---- id ---- */
+    test('newId: 비어 있지 않고 중복 없음', function () {
+      var seen = {}, i, id;
+      for (i = 0; i < 2000; i++) {
+        id = Store.newId();
+        ok(typeof id === 'string' && id.length > 0, 'id 형식');
+        ok(!seen[id], '중복 id');
+        seen[id] = 1;
+      }
+    });
+
+    /* ---- 선택한 탭(activeTab) ---- */
+    test('activeTab: 기본값 all, 저장 후 새로 load해도 유지', function () {
+      eq(Store.getSettings().activeTab, 'all');
+      eq(Store.setActiveTab('study'), true);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).settings.activeTab, 'study', '저장됨');
+      Store.configure({ key: TEST_KEY });
+      Store.load();
+      eq(Store.getSettings().activeTab, 'study');
+    });
+    test('activeTab: 잘못된 값은 거부하고 기존 값 유지', function () {
+      Store.setActiveTab('work');
+      eq(Store.setActiveTab('nope'), false);
+      eq(Store.setActiveTab(undefined), false);
+      eq(Store.getSettings().activeTab, 'work');
+    });
+    test('activeTab: 필드가 없는 예전 데이터·깨진 값은 all', function () {
+      seed({ version: 1, todos: [], settings: { lastCategory: 'study' } });
+      eq(Store.getSettings().activeTab, 'all', '필드 없음');
+      eq(Store.getSettings().lastCategory, 'study', '다른 설정 유지');
+      seed({ version: 1, todos: [], settings: { activeTab: 'zzz' } });
+      eq(Store.getSettings().activeTab, 'all', '깨진 값');
+    });
+    test('activeTab: 탭을 바꿔도 할 일 데이터는 그대로', function () {
+      Store.add('a', 'work');
+      var before = Store.todayList();
+      Store.setActiveTab('personal');
+      eq(Store.todayList(), before);
+    });
+
+    /* ---- 탭별 미완료 개수 ---- */
+    test('openCounts: 미완료만 센다(완료 제외), 전체 = 합계', function () {
+      eq(Store.openCounts(), { all: 0, work: 0, personal: 0, study: 0 }, '비어 있을 때');
+      var a = Store.add('a', 'work'), b = Store.add('b', 'work');
+      Store.add('c', 'personal');
+      var d = Store.add('d', 'study');
+      eq(Store.openCounts(), { all: 4, work: 2, personal: 1, study: 1 });
+      Store.toggle(a.id); Store.toggle(d.id);
+      eq(Store.openCounts(), { all: 2, work: 1, personal: 1, study: 0 }, '완료 후');
+      Store.toggle(a.id);
+      eq(Store.openCounts().work, 2, '완료 해제 후');
+      Store.remove(b.id);
+      eq(Store.openCounts(), { all: 2, work: 1, personal: 1, study: 0 }, '삭제 후');
+    });
+
+    /* ---- progress(category) 추가 검증 ---- */
+    test('progress(category): 카테고리별 분모·분자가 서로 섞이지 않음', function () {
+      var w1 = Store.add('w1', 'work'), w2 = Store.add('w2', 'work'), w3 = Store.add('w3', 'work');
+      var p1 = Store.add('p1', 'personal');
+      Store.toggle(w1.id); Store.toggle(w2.id); Store.toggle(p1.id);
+      eq(Store.progress('work'), { done: 2, total: 3, percent: 67 });
+      eq(Store.progress('personal'), { done: 1, total: 1, percent: 100 });
+      eq(Store.progress('study'), { done: 0, total: 0, percent: 0 });
+      eq(Store.progress(), { done: 3, total: 4, percent: 75 });
+    });
+    test('progress: 퍼센트는 반올림 정수 (1/8=13, 1/6=17, 5/6=83)', function () {
+      var ids = [];
+      for (var i = 0; i < 8; i++) ids.push(Store.add('t' + i, 'work').id);
+      Store.toggle(ids[0]);
+      eq(Store.progress().percent, 13, '1/8=12.5→13');
+      reset();
+      ids = [];
+      for (i = 0; i < 6; i++) ids.push(Store.add('t' + i, 'work').id);
+      Store.toggle(ids[0]);
+      eq(Store.progress().percent, 17, '1/6');
+      for (i = 1; i < 5; i++) Store.toggle(ids[i]);
+      eq(Store.progress().percent, 83, '5/6');
+      ok(Number.isInteger(Store.progress().percent), '정수');
+    });
+    test('progress: 100%는 전부 완료했을 때만', function () {
+      var a = Store.add('a', 'work'), b = Store.add('b', 'work');
+      Store.toggle(a.id);
+      ok(Store.progress().percent < 100, '절반');
+      Store.toggle(b.id);
+      eq(Store.progress(), { done: 2, total: 2, percent: 100 });
+    });
+    test('progress: 어제 완료한 항목은 분자·분모에서 빠짐', function () {
+      var now = L(2026, 11, 22, 10);
+      seed({ version: 1, settings: {}, todos: [
+        todo('yDone', { createdAt: 1, category: 'work', done: true, doneAt: L(2026, 11, 21, 18) }),
+        todo('tDone', { createdAt: 2, category: 'work', done: true, doneAt: L(2026, 11, 22, 9) }),
+        todo('open', { createdAt: 3, category: 'work' })
+      ] });
+      eq(Store.progress('work', now), { done: 1, total: 2, percent: 50 });
+      eq(Store.progress(undefined, now), { done: 1, total: 2, percent: 50 });
+    });
+    test('progress: 자정을 넘기면 오늘 완료 항목이 빠져 total이 줄어듦', function () {
+      var t = L(2026, 11, 22, 23, 50);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      var a = Store.add('a', 'work'), b = Store.add('b', 'work');
+      Store.toggle(a.id);
+      eq(Store.progress('work'), { done: 1, total: 2, percent: 50 }, '자정 전');
+      t = L(2026, 11, 23, 0, 10);
+      eq(Store.progress('work'), { done: 0, total: 1, percent: 0 }, '자정 후');
+      eq(Store.openCounts().work, 1, '미완료 개수는 그대로');
+    });
+
+    /* ---- 날짜 변경 처리 (checkDay) ---- */
+    test('checkDay: 같은 날이면 false, 자정이 지나면 한 번만 true', function () {
+      var t = L(2026, 11, 22, 23, 58);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      eq(Store.checkDay(), false, '로드 직후');
+      t = L(2026, 11, 22, 23, 59, 59, 999);
+      eq(Store.checkDay(), false, '자정 직전');
+      t = L(2026, 11, 23, 0, 0, 0, 0);
+      eq(Store.checkDay(), true, '자정 직후');
+      eq(Store.checkDay(), false, '같은 새 날짜에서 다시 호출');
+      t = L(2026, 11, 24, 8, 0);
+      eq(Store.checkDay(), true, '이틀째');
+    });
+    test('checkDay: 날짜가 바뀌면 purgeOld 실행, 같은 날에는 하지 않음', function () {
+      var t = L(2026, 11, 17, 22, 0);   // 완료 후 6일 23시간
+      Store.configure({ clock: function () { return t; } });
+      seed({ version: 1, settings: {}, todos: [
+        todo('done', { createdAt: 1, done: true, doneAt: L(2026, 11, 10, 23, 0) }),
+        todo('open', { createdAt: 2 })
+      ] });
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 2, '6일 23시간: 유지');
+      t = L(2026, 11, 17, 23, 30);       // 7일 넘었지만 같은 날 → 아직 정리 안 함
+      eq(Store.checkDay(), false);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 2, '같은 날: 정리 안 함');
+      t = L(2026, 11, 18, 0, 1);         // 날짜 변경
+      eq(Store.checkDay(), true);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.map(function (x) { return x.id; }), ['open'], '날짜 변경: 정리됨');
+    });
+    test('checkDay: 어제 완료한 항목이 목록과 진행률에서 빠짐', function () {
+      var t = L(2026, 11, 22, 21, 0);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      var a = Store.add('끝낸 일', 'work'), b = Store.add('남은 일', 'work');
+      Store.toggle(a.id);
+      eq(Store.todayList().map(function (x) { return x.title; }), ['남은 일', '끝낸 일']);
+      eq(Store.progress().done, 1);
+      t = L(2026, 11, 23, 7, 0);
+      eq(Store.checkDay(), true);
+      eq(Store.todayList().map(function (x) { return x.title; }), ['남은 일']);
+      eq(Store.progress(), { done: 0, total: 1, percent: 0 });
+    });
+    test('checkDay: load 전에 호출해도 오류 없이 false', function () {
+      Store.configure({ key: TEST_KEY });
+      eq(Store.checkDay(), false);
+    });
+
+    /* ---- 확인 알림: 미확인 상태 판단 (순수 함수) ---- */
+    var S8 = { reminderTime: '08:00', lastAckDate: null, lastNotifiedDate: null };
+    function due(s, ms) { return Store.reminderDue(s, ms); }
+    function withAck(date, extra) {
+      var o = { reminderTime: '08:00', lastAckDate: date, lastNotifiedDate: null };
+      for (var k in extra) o[k] = extra[k];
+      return o;
+    }
+
+    test('reminderDue: 07:59 → false, 08:00 → true (경계)', function () {
+      eq(due(S8, L(2026, 11, 20, 7, 59, 59, 999)), false, '07:59:59.999');
+      eq(due(S8, L(2026, 11, 20, 8, 0, 0, 0)), true, '08:00:00.000');
+      eq(due(S8, L(2026, 11, 20, 7, 59)), false, '07:59');
+      eq(due(S8, L(2026, 11, 20, 8, 0)), true, '08:00');
+      eq(due(S8, L(2026, 11, 20, 23, 59)), true, '밤에도 미확인이면 계속 true');
+      eq(due(S8, L(2026, 11, 20, 0, 0)), false, '자정 직후는 아직 아님');
+    });
+    test('reminderDue: 확인한 날은 false', function () {
+      var s = withAck('2026-11-20');
+      eq(due(s, L(2026, 11, 20, 8, 5)), false, '확인 직후');
+      eq(due(s, L(2026, 11, 20, 23, 59, 59, 999)), false, '그날 자정 직전');
+    });
+    test('reminderDue: 다음 날 07:59 false → 08:00 true', function () {
+      var s = withAck('2026-11-20');
+      eq(due(s, L(2026, 11, 21, 0, 0)), false, '다음 날 자정');
+      eq(due(s, L(2026, 11, 21, 7, 59, 59, 999)), false, '07:59:59.999');
+      eq(due(s, L(2026, 11, 21, 8, 0)), true, '08:00');
+    });
+    test('reminderDue: 토요일·일요일에도 동작(주말 포함)', function () {
+      eq(new Date(2026, 10, 21).getDay(), 6, '2026-11-21은 토요일');
+      eq(new Date(2026, 10, 22).getDay(), 0, '2026-11-22는 일요일');
+      var fri = withAck('2026-11-20');
+      eq(due(fri, L(2026, 11, 21, 7, 59)), false, '토 07:59');
+      eq(due(fri, L(2026, 11, 21, 8, 0)), true, '토 08:00');
+      var sat = withAck('2026-11-21');
+      eq(due(sat, L(2026, 11, 21, 12, 0)), false, '토 확인 후');
+      eq(due(sat, L(2026, 11, 22, 7, 59)), false, '일 07:59');
+      eq(due(sat, L(2026, 11, 22, 8, 0)), true, '일 08:00');
+      var sun = withAck('2026-11-22');
+      eq(due(sun, L(2026, 11, 23, 8, 0)), true, '월 08:00');
+    });
+    test('reminderDue: 7일 연속 매일 08:00에 true (요일 무관)', function () {
+      var days = {};
+      for (var i = 0; i < 7; i++) {
+        var d = new Date(2026, 10, 16 + i);
+        days[d.getDay()] = true;
+        var prev = Store.dateKey(new Date(2026, 10, 15 + i));
+        eq(due(withAck(prev), L(2026, 11, 16 + i, 8, 0)), true, '날짜 ' + (16 + i));
+        eq(due(withAck(prev), L(2026, 11, 16 + i, 7, 59)), false, '날짜 ' + (16 + i) + ' 07:59');
+      }
+      eq(Object.keys(days).length, 7, '모든 요일 포함');
+    });
+    test('reminderDue: 확인한 적 없으면(null) 08:00부터 true', function () {
+      eq(due({ reminderTime: '08:00', lastAckDate: null }, L(2026, 11, 20, 8, 0)), true);
+      eq(due({ reminderTime: '08:00' }, L(2026, 11, 20, 8, 0)), true, 'lastAckDate 필드 없음');
+    });
+    test('reminderDue: 알림 시각을 바꾸면 그 시각이 기준', function () {
+      var s = { reminderTime: '21:30', lastAckDate: null };
+      eq(due(s, L(2026, 11, 20, 21, 29, 59, 999)), false);
+      eq(due(s, L(2026, 11, 20, 21, 30)), true);
+      s = { reminderTime: '00:00', lastAckDate: null };
+      eq(due(s, L(2026, 11, 20, 0, 0)), true, '00:00');
+      s = { reminderTime: '23:59', lastAckDate: null };
+      eq(due(s, L(2026, 11, 20, 23, 58)), false);
+      eq(due(s, L(2026, 11, 20, 23, 59)), true);
+    });
+    test('reminderDue: 잘못된 알림 시각은 08:00으로, 미래 날짜의 확인 기록은 오늘이 아니므로 true', function () {
+      eq(due({ reminderTime: 'abc', lastAckDate: null }, L(2026, 11, 20, 7, 59)), false);
+      eq(due({ reminderTime: 'abc', lastAckDate: null }, L(2026, 11, 20, 8, 0)), true);
+      eq(due({ reminderTime: '08:00', lastAckDate: '2026-11-21' }, L(2026, 11, 20, 9, 0)), true, '시계가 되돌려진 경우');
+    });
+    test('reminderDue: Date 객체와 ms 모두 허용, 입력 값을 바꾸지 않음', function () {
+      var s = withAck(null), snap = JSON.stringify(s);
+      eq(due(s, new Date(2026, 10, 20, 8, 0)), true);
+      eq(due(s, L(2026, 11, 20, 8, 0)), true);
+      eq(JSON.stringify(s), snap, '인자 불변');
+    });
+    test('notifyDue: 미확인 + 오늘 알린 적 없음일 때만 true', function () {
+      var t = L(2026, 11, 20, 8, 0);
+      eq(Store.notifyDue(withAck(null), t), true);
+      eq(Store.notifyDue(withAck(null, { lastNotifiedDate: '2026-11-20' }), t), false, '오늘 이미 알림');
+      eq(Store.notifyDue(withAck(null, { lastNotifiedDate: '2026-11-19' }), t), true, '어제 알림');
+      eq(Store.notifyDue(withAck(null), L(2026, 11, 20, 7, 59)), false, '시각 전');
+      eq(Store.notifyDue(withAck('2026-11-20'), t), false, '이미 확인함');
+    });
+
+    /* ---- 확인 알림: 저장 ---- */
+    test('acknowledge: lastAckDate 저장, 새로 load해도 유지, 오늘은 더 이상 미확인 아님', function () {
+      var t = L(2026, 11, 20, 8, 30);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      eq(Store.isReminderDue(), true, '확인 전');
+      Store.acknowledge();
+      eq(Store.getSettings().lastAckDate, '2026-11-20');
+      eq(Store.isReminderDue(), false, '확인 후');
+      Store.configure({ key: TEST_KEY });
+      Store.load();
+      eq(Store.isReminderDue(), false, '새로 load 후에도');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).settings.lastAckDate, '2026-11-20');
+      t = L(2026, 11, 21, 8, 0);
+      eq(Store.isReminderDue(), true, '다음 날 08:00');
+    });
+    test('markNotified: 하루 한 번만 notifyDue, 다음 날 다시', function () {
+      var t = L(2026, 11, 20, 8, 1);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      eq(Store.isNotifyDue(), true);
+      Store.markNotified();
+      eq(Store.getSettings().lastNotifiedDate, '2026-11-20');
+      eq(Store.isNotifyDue(), false, '같은 날 다시 호출해도 false');
+      eq(Store.isReminderDue(), true, '알림을 보내도 확인 전까지는 미확인');
+      Store.configure({ key: TEST_KEY });
+      Store.load();
+      eq(Store.isNotifyDue(), false, '새로 load 후에도');
+      t = L(2026, 11, 21, 8, 1);
+      eq(Store.isNotifyDue(), true, '다음 날');
+    });
+    test('setReminderTime: 형식 검증과 저장', function () {
+      eq(Store.setReminderTime('21:30'), true);
+      eq(Store.getSettings().reminderTime, '21:30');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).settings.reminderTime, '21:30');
+      ['', '8:00', '25:00', '08:60', '08:00:00', 'ab:cd', null, undefined, 800].forEach(function (bad) {
+        eq(Store.setReminderTime(bad), false, String(bad));
+      });
+      eq(Store.getSettings().reminderTime, '21:30', '거부 후 값 유지');
+    });
+    test('setReminderTime: 새 시각이 아직 안 지났으면 오늘 확인·알림 기록을 지움', function () {
+      var t = L(2026, 11, 20, 10, 0, 30);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      Store.acknowledge(); Store.markNotified();
+      eq(Store.isReminderDue(), false, '확인 후');
+      Store.setReminderTime('10:01');
+      eq(Store.getSettings().lastAckDate, null);
+      eq(Store.getSettings().lastNotifiedDate, null);
+      eq(Store.isReminderDue(), false, '10:00:30 — 아직 아님');
+      t = L(2026, 11, 20, 10, 1, 0);
+      eq(Store.isReminderDue(), true, '10:01 — 미확인');
+      eq(Store.isNotifyDue(), true);
+    });
+    test('setReminderTime: 이미 지난 시각으로 바꾸면 확인 기록 유지, 어제 기록은 건드리지 않음', function () {
+      var t = L(2026, 11, 20, 10, 0);
+      Store.configure({ clock: function () { return t; } });
+      Store.load();
+      Store.acknowledge();
+      Store.setReminderTime('09:00');
+      eq(Store.getSettings().lastAckDate, '2026-11-20', '지난 시각');
+      Store.setReminderTime('10:00');
+      eq(Store.getSettings().lastAckDate, '2026-11-20', '같은 분');
+      seed({ version: 1, todos: [], settings: { lastAckDate: '2026-11-19', lastNotifiedDate: '2026-11-19' } });
+      Store.setReminderTime('22:00');
+      eq([Store.getSettings().lastAckDate, Store.getSettings().lastNotifiedDate], ['2026-11-19', '2026-11-19'], '어제 기록 유지');
+    });
+    test('설정: 예전 데이터(필드 없음)와 깨진 값은 기본값으로', function () {
+      seed({ version: 1, todos: [], settings: { lastCategory: 'study' } });
+      eq([Store.getSettings().reminderTime, Store.getSettings().lastAckDate, Store.getSettings().lastNotifiedDate], ['08:00', null, null]);
+      seed({ version: 1, todos: [], settings: { reminderTime: '99:99', lastAckDate: 5, lastNotifiedDate: {} } });
+      eq([Store.getSettings().reminderTime, Store.getSettings().lastAckDate, Store.getSettings().lastNotifiedDate], ['08:00', null, null]);
+    });
+
+    /* ---- 백업: 검증 함수 ---- */
+    function goodTodo(o) {
+      var t = { id: 'a', title: '할 일', category: 'work', done: false, createdAt: 1000, doneAt: null, updatedAt: 1000 };
+      for (var k in o) t[k] = o[k];
+      return t;
+    }
+    function backup(todos, extra) {
+      var b = { version: 1, todos: todos, settings: { reminderTime: '09:30', lastCategory: 'study', lastAckDate: null, lastNotifiedDate: null, activeTab: 'personal' } };
+      for (var k in extra) b[k] = extra[k];
+      return b;
+    }
+    function bad(obj, contains) {
+      var r = Store.validateBackup(obj);
+      eq(r.ok, false, '거부되어야 함');
+      ok(typeof r.error === 'string' && r.error.length > 0 && r.error.indexOf('\n') === -1, '한 줄 메시지');
+      if (contains) ok(r.error.indexOf(contains) !== -1, '메시지에 "' + contains + '" 포함: ' + r.error);
+    }
+
+    test('validateBackup: 정상 백업(완료/미완료, settings 있음/없음, 빈 todos)', function () {
+      eq(Store.validateBackup(backup([goodTodo({}), goodTodo({ id: 'b', done: true, doneAt: 2000 })])).ok, true);
+      eq(Store.validateBackup({ version: 1, todos: [goodTodo({})] }).ok, true, 'settings 없음');
+      eq(Store.validateBackup({ version: 1, todos: [] }).ok, true, '빈 todos');
+      eq(Store.validateBackup(backup([goodTodo({ title: '  앞뒤 공백  ' })])).ok, true, '공백 포함 제목');
+      eq(Store.validateBackup(backup([goodTodo({ title: new Array(101).join('가') })])).ok, true, '100자');
+    });
+    test('validateBackup: 최상위 구조 오류', function () {
+      bad(null); bad([]); bad('text'); bad(42);
+      bad({ todos: [] }, 'version');
+      bad({ version: '1', todos: [] }, 'version');
+      bad({ version: 1 }, 'todos');
+      bad({ version: 1, todos: {} }, 'todos');
+      bad({ version: 1, todos: 'x' }, 'todos');
+      bad({ version: 1, todos: [], settings: 5 }, 'settings');
+      bad({ version: 1, todos: [], settings: [] }, 'settings');
+    });
+    test('validateBackup: version이 다르면 거부(새 버전/옛 버전)', function () {
+      bad({ version: 2, todos: [] }, '새로운 버전');
+      bad({ version: 0, todos: [] }, 'version');
+    });
+    test('validateBackup: 필드 누락을 항목 번호와 함께 알려 줌', function () {
+      ['id', 'title', 'category', 'done', 'createdAt', 'updatedAt', 'doneAt'].forEach(function (f) {
+        var t = goodTodo({}); delete t[f];
+        bad(backup([goodTodo({ id: 'ok' }), t]), '2번째 할 일');
+        bad(backup([goodTodo({ id: 'ok' }), t]), f);
+      });
+    });
+    test('validateBackup: 잘못된 category', function () {
+      bad(backup([goodTodo({ category: 'play' })]), 'category');
+      bad(backup([goodTodo({ category: '' })]), 'category');
+      bad(backup([goodTodo({ category: 'WORK' })]), 'category');
+      bad(backup([goodTodo({ category: null })]), 'category');
+    });
+    test('validateBackup: 타입 오류(id, title, done, 시각)', function () {
+      bad(backup([goodTodo({ id: 5 })]), 'id');
+      bad(backup([goodTodo({ id: '' })]), 'id');
+      bad(backup([goodTodo({ title: 5 })]), 'title');
+      bad(backup([goodTodo({ done: 'false' })]), 'done');
+      bad(backup([goodTodo({ done: 1 })]), 'done');
+      bad(backup([goodTodo({ createdAt: '1000' })]), 'createdAt');
+      bad(backup([goodTodo({ createdAt: NaN })]), 'createdAt');
+      bad(backup([goodTodo({ updatedAt: null })]), 'updatedAt');
+      bad(backup(['문자열']), '객체');
+      bad(backup([null]), '객체');
+    });
+    test('validateBackup: title 길이(빈 값·공백만·101자)', function () {
+      bad(backup([goodTodo({ title: '' })]), '비어');
+      bad(backup([goodTodo({ title: '   ' })]), '비어');
+      bad(backup([goodTodo({ title: new Array(102).join('가') })]), '100자');
+    });
+    test('validateBackup: done과 doneAt의 일관성', function () {
+      bad(backup([goodTodo({ done: true, doneAt: null })]), 'doneAt');
+      bad(backup([goodTodo({ done: true, doneAt: '어제' })]), 'doneAt');
+      bad(backup([goodTodo({ done: false, doneAt: 5000 })]), 'doneAt');
+    });
+    test('validateBackup: id 중복', function () {
+      bad(backup([goodTodo({ id: 'x' }), goodTodo({ id: 'x' })]), '중복');
+    });
+    test('validateBackup: 입력 객체를 바꾸지 않음', function () {
+      var b = backup([goodTodo({})]), snap = JSON.stringify(b);
+      Store.validateBackup(b);
+      eq(JSON.stringify(b), snap);
+    });
+
+    /* ---- 백업: 파일 텍스트 해석 ---- */
+    test('parseBackup: 정상 JSON', function () {
+      var r = Store.parseBackup(JSON.stringify(backup([goodTodo({})])));
+      eq(r.ok, true);
+      eq(r.data.todos.length, 1);
+    });
+    test('parseBackup: 깨진 JSON·빈 파일·JSON이 아닌 텍스트', function () {
+      ['{"version":1,"todos":[', '', '   ', 'hello', '<html></html>', '{version:1}', 'undefined'].forEach(function (txt) {
+        var r = Store.parseBackup(txt);
+        eq(r.ok, false, JSON.stringify(txt));
+        ok(r.error.indexOf('JSON') !== -1, 'JSON 언급: ' + r.error);
+      });
+    });
+    test('parseBackup: JSON은 맞지만 구조가 틀리면 구조 오류를 알려 줌', function () {
+      var r = Store.parseBackup('{"version":1,"todos":[{"id":"a"}]}');
+      eq(r.ok, false);
+      ok(r.error.indexOf('1번째 할 일') !== -1, r.error);
+      eq(Store.parseBackup('[]').ok, false);
+      eq(Store.parseBackup('null').ok, false);
+    });
+
+    /* ---- 백업: 내보내기·가져오기(Store) ---- */
+    test('exportData → parseBackup → importBackup 왕복: 데이터 동일', function () {
+      setNow(L(2026, 11, 22, 10));
+      var a = Store.add('가', 'work'); Store.add('나', 'personal'); Store.add('다', 'study');
+      Store.toggle(a.id);
+      Store.setActiveTab('study'); Store.setReminderTime('21:15');
+      var text = Store.exportData();
+      var snap = { list: Store.todayList(), settings: Store.getSettings(), stored: JSON.parse(localStorage.getItem(TEST_KEY)) };
+      eq(JSON.parse(text), snap.stored, '내보낸 내용 = 저장된 전체 데이터');
+      // 다른 데이터로 덮어쓴 뒤 복원
+      Store.remove(a.id); Store.add('나중에 추가', 'work'); Store.setActiveTab('all'); Store.setReminderTime('06:00');
+      var p = Store.parseBackup(text);
+      eq(p.ok, true);
+      var r = Store.importBackup(p.data);
+      eq(r.ok, true); eq(r.total, 3); eq(r.purged, 0);
+      eq(Store.todayList(), snap.list, '할 일 복원');
+      eq(Store.getSettings(), snap.settings, '설정 복원');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)), snap.stored, '저장소도 동일');
+    });
+    test('exportData: 오늘 목록이 아니라 전체(오래된 완료 포함)를 내보냄', function () {
+      var now = L(2026, 11, 22, 12);
+      setNow(now);
+      seed({ version: 1, settings: {}, todos: [
+        goodTodo({ id: 'y', category: 'study', done: true, createdAt: 1, doneAt: now - 2 * DAY, updatedAt: 1 }),
+        goodTodo({ id: 'o', createdAt: 2, updatedAt: 2 })] });
+      eq(Store.todayList().length, 1, '오늘 목록은 1개');
+      eq(JSON.parse(Store.exportData()).todos.length, 2, '내보내기는 2개');
+      eq(Store.todoCount(), 2);
+    });
+    test('importBackup: 교체 전 현재 데이터를 before-import 키에 보관', function () {
+      setNow(L(2026, 11, 22, 10));
+      Store.add('기존 1', 'work'); Store.add('기존 2', 'work');
+      var before = JSON.parse(localStorage.getItem(TEST_KEY));
+      eq(localStorage.getItem(BEFORE_KEY), null, '가져오기 전에는 없음');
+      var r = Store.importBackup(backup([goodTodo({ id: 'n1', title: '새것' })]));
+      eq(r.ok, true);
+      eq(JSON.parse(localStorage.getItem(BEFORE_KEY)), before, '이전 데이터 그대로 보관');
+      eq(Store.todayList().map(function (t) { return t.title; }), ['새것'], '교체됨');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 1, '저장소도 교체');
+    });
+    test('importBackup: 검증 실패 시 기존 데이터 그대로, before-import 키도 만들지 않음', function () {
+      Store.add('지켜야 할 데이터', 'work');
+      var before = localStorage.getItem(TEST_KEY);
+      var r = Store.importBackup(backup([goodTodo({ category: 'play' })]));
+      eq(r.ok, false);
+      ok(r.error.indexOf('category') !== -1, r.error);
+      eq(localStorage.getItem(TEST_KEY), before, '저장소 불변');
+      eq(Store.todayList().length, 1, '메모리 불변');
+      eq(localStorage.getItem(BEFORE_KEY), null, 'before-import 없음');
+      eq(Store.importBackup(null).ok, false);
+      eq(Store.importBackup({ version: 1 }).ok, false);
+    });
+    test('importBackup: 저장소 쓰기가 실패하면 취소하고 기존 데이터 유지', function () {
+      Store.add('기존', 'work');
+      var orig = Storage.prototype.setItem, snap = Store.todayList();
+      Storage.prototype.setItem = function () { throw new Error('QuotaExceeded'); };
+      var r;
+      try { r = Store.importBackup(backup([goodTodo({ id: 'z', title: '새것' })])); }
+      finally { Storage.prototype.setItem = orig; }
+      eq(r.ok, false);
+      eq(Store.todayList(), snap, '메모리 불변');
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.length, 1, '저장소 불변');
+    });
+    test('importBackup: 가져온 뒤 purgeOld 적용(8일 전 완료 삭제, 6일 전 유지)', function () {
+      var now = L(2026, 11, 22, 12);
+      setNow(now);
+      var r = Store.importBackup(backup([
+        goodTodo({ id: 'old8', done: true, doneAt: now - 8 * DAY, createdAt: 1 }),
+        goodTodo({ id: 'keep6', done: true, doneAt: now - 6 * DAY, createdAt: 2 }),
+        goodTodo({ id: 'open', createdAt: 3 })]));
+      eq(r.ok, true); eq(r.total, 2); eq(r.purged, 1);
+      eq(JSON.parse(localStorage.getItem(TEST_KEY)).todos.map(function (t) { return t.id; }).sort(), ['keep6', 'open']);
+    });
+    test('importBackup: settings가 없는 백업은 현재 설정 유지, 있으면 교체', function () {
+      Store.setReminderTime('07:30'); Store.setActiveTab('work');
+      Store.importBackup({ version: 1, todos: [goodTodo({})] });
+      eq([Store.getSettings().reminderTime, Store.getSettings().activeTab], ['07:30', 'work'], 'settings 없음 → 유지');
+      Store.importBackup(backup([goodTodo({})]));
+      eq([Store.getSettings().reminderTime, Store.getSettings().activeTab, Store.getSettings().lastCategory], ['09:30', 'personal', 'study'], 'settings 있음 → 교체');
+    });
+    test('importBackup: 빈 백업(할 일 0개)도 가능, 새로 load해도 유지', function () {
+      Store.add('a', 'work');
+      eq(Store.importBackup({ version: 1, todos: [] }).ok, true);
+      Store.configure({ key: TEST_KEY }); Store.load();
+      eq(Store.todoCount(), 0);
+    });
+    test('importBackup: 제목의 앞뒤 공백은 정리되어 저장', function () {
+      Store.importBackup(backup([goodTodo({ title: '  공백 제거  ' })]));
+      eq(Store.todayList()[0].title, '공백 제거');
+    });
+    test('backupFileName: todo-backup-YYYY-MM-DD.json (로컬 날짜)', function () {
+      eq(Store.backupFileName(L(2026, 11, 22, 0, 30)), 'todo-backup-2026-11-22.json');
+      eq(Store.backupFileName(L(2026, 1, 5, 23, 59)), 'todo-backup-2026-01-05.json');
+      setNow(L(2027, 3, 9, 8));
+      eq(Store.backupFileName(), 'todo-backup-2027-03-09.json', '인자 없으면 현재');
+    });
+
+    /* ---- 저장소 읽기 실패 ---- */
+    test('getItem이 예외를 던지면: 기존 저장 데이터를 덮어쓰지 않고 save는 false', function () {
+      var orig = JSON.stringify({ version: 1, settings: {}, todos: [goodTodo({ id: 'keep', title: '지켜야 함' })] });
+      localStorage.setItem(TEST_KEY, orig);
+      var realGet = Storage.prototype.getItem;
+      Storage.prototype.getItem = function () { throw new Error('denied'); };
+      try {
+        Store.configure({ key: TEST_KEY });
+        Store.load();
+        var t = Store.add('새 항목', 'work');
+        ok(t, '메모리에는 추가됨');
+        eq(Store.save(), false, 'save 반환값');
+        eq(Store.saveOk(), false, 'saveOk');
+        Store.toggle(t.id); Store.remove(t.id);
+      } finally { Storage.prototype.getItem = realGet; }
+      eq(localStorage.getItem(TEST_KEY), orig, '저장소는 그대로');
+      Store.configure({ key: TEST_KEY });
+      Store.load();
+      eq(Store.todayList().map(function (x) { return x.id; }), ['keep'], '다시 읽으면 원래 데이터');
+      eq(Store.save(), true, '읽기가 정상이면 저장도 정상');
+    });
+
+    /* ---- 격리 ---- */
+    test('실제 키(todo-app-v1)를 건드리지 않음', function () {
+      Store.add('a', 'work');
+      eq(localStorage.getItem(REAL_KEY), realBefore);
+      eq(localStorage.getItem(REAL_KEY + '-before-import'), realBeforeImport, '실제 before-import 키');
+    });
+
+    // 정리 후 결과 표시
+    localStorage.removeItem(TEST_KEY);
+    localStorage.removeItem(CORRUPT_KEY);
+    localStorage.removeItem(BEFORE_KEY);
+    Store.configure({ key: REAL_KEY, clock: null });
+
+    var list = document.getElementById('results');
+    var failed = 0;
+    results.forEach(function (r) {
+      var li = document.createElement('li');
+      var mark = document.createElement('span');
+      mark.className = r.ok ? 'pass-mark' : 'fail-mark';
+      mark.textContent = r.ok ? '통과 ' : '실패 ';
+      li.appendChild(mark);
+      li.appendChild(document.createTextNode(r.name));
+      if (!r.ok) {
+        failed++;
+        var m = document.createElement('div');
+        m.className = 'msg';
+        m.textContent = r.msg;
+        li.appendChild(m);
+      }
+      list.appendChild(li);
+    });
+    var summary = document.getElementById('summary');
+    summary.textContent = failed
+      ? failed + '개 실패 (전체 ' + results.length + '개)'
+      : '전체 ' + results.length + '개 통과';
+    summary.className = failed ? 'fail' : 'pass';
+    document.title = (failed ? '실패 ' : '통과 ') + '- Store 테스트';
+  </script>
+</body>
+</html>
