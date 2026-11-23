@@ -447,7 +447,9 @@ body {
 }
 .event-form__time { flex: 0 0 auto; }
 .event-form__title { flex: 1 1 auto; min-width: 0; }
-.event-form input {
+.event-form__category { flex: 0 0 auto; }
+.event-form input,
+.event-form select {
   width: 100%;
   min-height: var(--touch);
   padding: 0 10px;
@@ -457,6 +459,7 @@ body {
   color: var(--text);
   font: inherit;
 }
+.event-form select { padding: 0 12px; }
 .event-form input[type="time"]:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 2px;

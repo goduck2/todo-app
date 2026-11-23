@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # 프로젝트: 할 일 관리 앱
 - 하루 10~20개 할 일을 관리하는 1인용 앱. 화면은 한 페이지.
-- 기능: 할 일 추가/수정/삭제, 완료 체크, 카테고리(업무/개인/공부) 필터, 오늘 진행률, 매일 08:00 확인 알림(주말 포함, 오늘 일정 개수·제목도 표시), 월 달력 일정 추가/삭제, JSON 백업 내보내기/가져오기.
+- 기능: 할 일 추가/수정/삭제, 완료 체크, 카테고리(업무/개인/공부) 필터, 오늘 진행률, 매일 08:00 확인 알림(주말 포함, 오늘 일정 개수·제목도 표시), 월 달력 일정 추가/삭제(카테고리 구분, 그날 오늘 할 일에 반영), JSON 백업 내보내기/가져오기.
 
 ## 실행과 테스트
 빌드·린트 단계는 없습니다. 파일을 고친 뒤 브라우저로 바로 엽니다.
@@ -39,9 +39,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - UI 문구는 한국어. 코드 주석은 짧게.
 
 ## 데이터 규칙
-- todo: { id, title(1~100자), category: "work"|"personal"|"study", done, createdAt, doneAt|null, updatedAt }
+- todo: { id, title(1~100자), category: "work"|"personal"|"study", done, createdAt, doneAt|null, updatedAt, eventId|null }
 - settings: { reminderTime: "08:00", lastCategory, lastAckDate, lastNotifiedDate, activeTab: "all"|"work"|"personal"|"study" }
-- event: { id, date: "YYYY-MM-DD"(로컬 날짜), time: "HH:MM"|null(종일), title(1~100자), createdAt }. 자동 삭제 없음.
+- event: { id, date: "YYYY-MM-DD"(로컬 날짜), time: "HH:MM"|null(종일), title(1~100자), category, synced, createdAt }. 자동 삭제 없음.
+  - category·synced·eventId는 나중에 생긴 선택 항목이다. 없으면 category는 "personal", synced는 false, eventId는 null로 읽는다.
+- 일정 → 오늘 할 일: 그날이 되면(시작·날짜 변경·오늘 일정 추가·가져오기 때 `Store.syncToday()`) 같은 카테고리의 할 일을 만든다(제목은 "HH:MM 내용", eventId로 연결).
+  - 만든 뒤 일정의 synced를 true로 바꿔, 할 일을 지워도 다시 만들지 않는다.
+  - 일정을 지우면 연결된 미완료 할 일도 지우고(완료한 것은 남김), 실행 취소하면 둘 다 되돌린다. 할 일 수정·완료는 일정에 반영하지 않는다.
 - 최상위: { version: 1, todos: [], events: [], settings: {} }
   - events는 나중에 추가된 선택 항목이라 version은 1 그대로다(옛 버전 앱이 새 데이터를 깨진 데이터로 보지 않도록). events가 없는 데이터·백업도 정상으로 읽는다.
   - events가 없는 옛 백업을 가져오면 현재 일정은 유지한다(settings가 없을 때와 같은 방식).

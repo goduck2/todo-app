@@ -76,7 +76,8 @@ var Store = (function () {
   function copy(todo) {
     return {
       id: todo.id, title: todo.title, category: todo.category, done: todo.done,
-      createdAt: todo.createdAt, doneAt: todo.doneAt, updatedAt: todo.updatedAt
+      createdAt: todo.createdAt, doneAt: todo.doneAt, updatedAt: todo.updatedAt,
+      eventId: todo.eventId
     };
   }
 
@@ -92,16 +93,23 @@ var Store = (function () {
       id: t.id, title: title, category: t.category, done: done,
       createdAt: t.createdAt,
       doneAt: done ? (isNum(t.doneAt) ? t.doneAt : updatedAt) : null,
-      updatedAt: updatedAt
+      updatedAt: updatedAt,
+      eventId: typeof t.eventId === 'string' && t.eventId ? t.eventId : null
     };
   }
 
   function sortByCreated(a, b) { return a.createdAt - b.createdAt; }
 
-  /* 일정: { id, date: "YYYY-MM-DD", time: "HH:MM"|null, title(1~100자), createdAt } */
+  /* 일정: { id, date: "YYYY-MM-DD", time: "HH:MM"|null, title(1~100자), category, synced, createdAt }
+     synced = 그날 할 일로 이미 옮겼는지(할 일을 지워도 다시 만들지 않도록) */
+
+  var EVENT_CATEGORY = 'personal';   // category가 없는 옛 일정의 기본값
 
   function copyEvent(ev) {
-    return { id: ev.id, date: ev.date, time: ev.time, title: ev.title, createdAt: ev.createdAt };
+    return {
+      id: ev.id, date: ev.date, time: ev.time, title: ev.title,
+      category: ev.category, synced: ev.synced, createdAt: ev.createdAt
+    };
   }
 
   function normalizeEvent(e) {
@@ -110,7 +118,16 @@ var Store = (function () {
     if (typeof e.id !== 'string' || !e.id || title === null || !isDate(e.date) ||
         !isNum(e.createdAt)) return null;
     if (e.time !== null && e.time !== undefined && !isTime(e.time)) return null;
-    return { id: e.id, date: e.date, time: isTime(e.time) ? e.time : null, title: title, createdAt: e.createdAt };
+    return {
+      id: e.id, date: e.date, time: isTime(e.time) ? e.time : null, title: title,
+      category: isCat(e.category) ? e.category : EVENT_CATEGORY, synced: e.synced === true,
+      createdAt: e.createdAt
+    };
+  }
+
+  // 일정에서 만든 할 일 제목: 시각이 있으면 앞에 붙인다(100자로 자름)
+  function eventTodoTitle(ev) {
+    return ((ev.time ? ev.time + ' ' : '') + ev.title).slice(0, 100);
   }
 
   // 날짜 → 시각 없는 일정(종일) 먼저 → 시각순 → 추가순
@@ -183,6 +200,7 @@ var Store = (function () {
     }
     knownDay = dateKey();
     purgeOld();
+    syncToday();
     return !bad;
   }
 
@@ -220,7 +238,7 @@ var Store = (function () {
     var now = clock();
     var todo = {
       id: newId(), title: t, category: category, done: false,
-      createdAt: now, doneAt: null, updatedAt: now
+      createdAt: now, doneAt: null, updatedAt: now, eventId: null
     };
     state.todos.push(todo);
     state.settings.lastCategory = category;
@@ -354,26 +372,44 @@ var Store = (function () {
     state.events.splice(i, 0, ev);
   }
 
-  // time은 "HH:MM" 또는 ''/null(시각 없음). 성공하면 새 일정(복사본), 거부하면 null.
-  function addEvent(date, time, title) {
+  // time은 "HH:MM" 또는 ''/null(시각 없음), category는 생략하면 personal.
+  // 성공하면 새 일정(복사본), 거부하면 null. 오늘 일정이면 바로 할 일로 옮긴다.
+  function addEvent(date, time, title, category) {
     ensureLoaded();
     var t = cleanTitle(title);
     if (t === null || !isDate(date)) return null;
     if (time === '' || time === undefined) time = null;
     if (time !== null && !isTime(time)) return null;
-    var ev = { id: newId(), date: date, time: time, title: t, createdAt: clock() };
+    if (category === undefined) category = EVENT_CATEGORY;
+    if (!isCat(category)) return null;
+    var ev = { id: newId(), date: date, time: time, title: t, category: category, synced: false, createdAt: clock() };
     insertEvent(ev);
+    syncToday();
     save();
     return copyEvent(ev);
   }
 
-  // 삭제한 일정(복사본). 실행 취소는 restoreEvent()에.
+  function findEventTodo(eventId) {
+    for (var i = 0; i < state.todos.length; i++) {
+      if (state.todos[i].eventId === eventId) return state.todos[i];
+    }
+    return null;
+  }
+
+  // 삭제한 일정(복사본). 그 일정에서 만든 미완료 할 일도 함께 지우고 복사본의 todo에 담는다.
+  // 실행 취소는 restoreEvent()에.
   function removeEvent(id) {
     var ev = findEvent(id);
     if (!ev) return null;
     state.events.splice(state.events.indexOf(ev), 1);
+    var out = copyEvent(ev);
+    var todo = findEventTodo(ev.id);
+    if (todo && !todo.done) {
+      state.todos.splice(state.todos.indexOf(todo), 1);
+      out.todo = copy(todo);
+    }
     save();
-    return copyEvent(ev);
+    return out;
   }
 
   function restoreEvent(ev) {
@@ -381,8 +417,29 @@ var Store = (function () {
     var e = normalizeEvent(ev);
     if (!e || findEvent(e.id)) return false;
     insertEvent(e);
+    if (ev.todo) restore(ev.todo);
     save();
     return true;
+  }
+
+  // 오늘 날짜 일정 중 아직 옮기지 않은 것을 할 일로 만든다. 만든 개수를 돌려준다.
+  // 시작할 때, 날짜가 바뀔 때, 오늘 일정을 추가할 때 부른다.
+  function syncToday(now) {
+    ensureLoaded();
+    var today = dateKey(now), n = 0;
+    state.events.forEach(function (ev) {
+      if (ev.date !== today || ev.synced) return;
+      ev.synced = true;
+      if (findEventTodo(ev.id)) return;
+      var t = clock();
+      state.todos.push({
+        id: newId(), title: eventTodoTitle(ev), category: ev.category, done: false,
+        createdAt: t, doneAt: null, updatedAt: t, eventId: ev.id
+      });
+      n++;
+    });
+    if (n) save();
+    return n;
   }
 
   // 그날 일정(정렬된 복사본)
@@ -471,6 +528,7 @@ var Store = (function () {
     if (k === knownDay) return false;
     knownDay = k;
     purgeOld();
+    syncToday();
     return true;
   }
 
@@ -515,6 +573,9 @@ var Store = (function () {
       if (t.doneAt === undefined) return fail(n + 'doneAt이 없습니다(미완료는 null)');
       if (t.done && !isNum(t.doneAt)) return fail(n + 'doneAt이 숫자가 아닙니다(완료 항목)');
       if (!t.done && t.doneAt !== null) return fail(n + 'doneAt이 null이 아닙니다(미완료 항목)');
+      if (t.eventId !== undefined && t.eventId !== null && (typeof t.eventId !== 'string' || !t.eventId)) {
+        return fail(n + 'eventId가 문자열 또는 null이 아닙니다');
+      }
     }
     // events는 없어도 된다(일정 기능 전에 만든 백업)
     if (d.events !== undefined) {
@@ -533,6 +594,9 @@ var Store = (function () {
         if (elen < 1) return fail(en + 'title이 비어 있습니다');
         if (elen > 100) return fail(en + 'title이 100자를 넘습니다(' + elen + '자)');
         if (!isNum(e.createdAt)) return fail(en + 'createdAt이 없거나 숫자가 아닙니다');
+        // category·synced는 나중에 생긴 항목이라 없어도 된다
+        if (e.category !== undefined && !isCat(e.category)) return fail(en + 'category 값이 올바르지 않습니다(work/personal/study만 가능)');
+        if (e.synced !== undefined && typeof e.synced !== 'boolean') return fail(en + 'synced가 true/false가 아닙니다');
       }
     }
     if (d.settings !== undefined && !isObj(d.settings)) return fail('settings 항목이 객체가 아닙니다');
@@ -571,6 +635,7 @@ var Store = (function () {
       return { ok: false, error: '저장하지 못해 가져오기를 취소했습니다(저장 공간 확인)' };
     }
     var purged = purgeOld();
+    syncToday();
     return { ok: true, total: state.todos.length, events: state.events.length, purged: purged };
   }
 
@@ -597,7 +662,7 @@ var Store = (function () {
     todoCount: todoCount, exportData: exportData, backupFileName: backupFileName,
     validateBackup: validateBackup, parseBackup: parseBackup, importBackup: importBackup,
     addEvent: addEvent, removeEvent: removeEvent, restoreEvent: restoreEvent,
-    eventsOn: eventsOn, eventsInMonth: eventsInMonth, eventCount: eventCount,
+    eventsOn: eventsOn, eventsInMonth: eventsInMonth, eventCount: eventCount, syncToday: syncToday,
     getSettings: getSettings, setActiveTab: setActiveTab, saveOk: function () { return lastSaveOk; },
     dateKey: dateKey, isDate: isDate, newId: newId, configure: configure
   };
@@ -1145,6 +1210,7 @@ var Store = (function () {
   var eventForm = document.getElementById('event-form');
   var eventTime = document.getElementById('event-time');
   var eventTitle = document.getElementById('event-title');
+  var eventCategory = document.getElementById('event-category');
   var CELL_EVENTS = 2;   // 칸 안에 보여 줄 일정 수(나머지는 +N)
 
   var selDate = Store.dateKey();       // 선택한 날짜(저장하지 않음, 시작은 오늘)
@@ -1251,6 +1317,8 @@ var Store = (function () {
       t.textContent = e.time || '종일';
       var title = el('span', 'event__title');
       title.textContent = e.title;
+      var badge = el('span', 'badge badge--' + e.category);
+      badge.textContent = CAT_LABEL[e.category];
       var del = el('button', 'todo__delete');
       del.type = 'button';
       del.dataset.role = 'delete-event';
@@ -1258,6 +1326,7 @@ var Store = (function () {
       del.textContent = '×';
       li.appendChild(t);
       li.appendChild(title);
+      li.appendChild(badge);
       li.appendChild(del);
       lf.appendChild(li);
     });
@@ -1281,7 +1350,7 @@ var Store = (function () {
   function afterEventChange() {
     if (!Store.saveOk()) warnOnce();
     renderSchedule(false);
-    renderReminder();
+    render();   // 오늘 일정은 할 일 목록에도 반영된다
   }
 
   calBody.addEventListener('click', function (e) {
@@ -1313,7 +1382,7 @@ var Store = (function () {
 
   eventForm.addEventListener('submit', function (e) {
     e.preventDefault();
-    var ev = Store.addEvent(selDate, eventTime.value, eventTitle.value);
+    var ev = Store.addEvent(selDate, eventTime.value, eventTitle.value, eventCategory.value);
     if (!ev) {
       if (!eventTitle.value.trim()) eventTitle.value = '';
       eventTitle.focus();

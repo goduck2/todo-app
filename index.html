@@ -124,6 +124,14 @@
             <span class="visually-hidden">일정 내용</span>
             <input type="text" id="event-title" name="title" maxlength="100" required placeholder="일정 내용">
           </label>
+          <label class="event-form__category" for="event-category">
+            <span class="visually-hidden">일정 카테고리</span>
+            <select id="event-category" name="category">
+              <option value="work">업무</option>
+              <option value="personal">개인</option>
+              <option value="study">공부</option>
+            </select>
+          </label>
           <button type="submit" class="btn btn--primary">추가</button>
         </form>
       </div>

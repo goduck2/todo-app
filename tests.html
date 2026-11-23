@@ -937,6 +937,85 @@
       eq(JSON.parse(Store.exportData()).events.length, 1, '내보내기에 포함');
     });
 
+    /* ---- 일정 → 오늘 할 일 ---- */
+    function titles(list) { return list.map(function (t) { return t.title; }); }
+    test('addEvent: category 기본값 personal, 잘못된 값 거부', function () {
+      eq(Store.addEvent('2026-11-22', '', 'a').category, 'personal');
+      eq(Store.addEvent('2026-11-22', '', 'b', 'study').category, 'study');
+      eq(Store.addEvent('2026-11-22', '', 'c', 'play'), null);
+      eq(Store.eventCount(), 2);
+    });
+    test('오늘 일정을 추가하면 같은 카테고리 할 일이 바로 생김(시각은 제목 앞에)', function () {
+      setNow(L(2026, 11, 23, 9));
+      var e = Store.addEvent('2026-11-23', '14:00', '치과', 'personal');
+      Store.addEvent('2026-11-23', '', '보고서 마감', 'work');
+      Store.addEvent('2026-11-24', '10:00', '내일 일정', 'work');
+      var list = Store.todayList();
+      eq(titles(list), ['14:00 치과', '보고서 마감']);
+      eq([list[0].category, list[0].eventId, list[0].done], ['personal', e.id, false]);
+      eq(list[1].category, 'work');
+      eq(Store.eventsOn('2026-11-23').map(function (x) { return x.synced; }), [true, true]);
+      eq(Store.eventsOn('2026-11-24')[0].synced, false, '다른 날은 그대로');
+      eq(Store.syncToday(), 0, '두 번 만들지 않음');
+      eq(Store.progress('work'), { done: 0, total: 1, percent: 0 }, '진행률에 포함');
+    });
+    test('그날이 되면(시작·날짜 변경) 일정이 할 일로 옮겨짐', function () {
+      var t = L(2026, 11, 23, 9);
+      Store.configure({ clock: function () { return t; } });   // 상태를 유지한 채 시계만 옮김
+      Store.addEvent('2026-11-24', '10:00', '회의', 'work');
+      eq(Store.todayList(), []);
+      t = L(2026, 11, 24, 7);
+      eq(Store.checkDay(), true);
+      eq(titles(Store.todayList()), ['10:00 회의']);
+      // 시작할 때(load)도 같은 처리
+      Store.addEvent('2026-11-25', '', '공부', 'study');
+      Store.configure({ key: TEST_KEY });
+      setNow(L(2026, 11, 25, 8));
+      Store.load();
+      eq(titles(Store.todayList()), ['10:00 회의', '공부']);
+    });
+    test('옮겨진 할 일을 지워도 다시 만들지 않음', function () {
+      setNow(L(2026, 11, 23, 9));
+      Store.addEvent('2026-11-23', '', '운동');
+      Store.remove(Store.todayList()[0].id);
+      eq(Store.syncToday(), 0);
+      Store.configure({ key: TEST_KEY });
+      setNow(L(2026, 11, 23, 10));
+      Store.load();
+      eq(Store.todayList(), []);
+      eq(Store.eventCount(), 1, '일정은 남음');
+    });
+    test('일정 삭제 → 미완료 할 일도 삭제, 실행 취소 → 둘 다 복원, 완료한 할 일은 남김', function () {
+      setNow(L(2026, 11, 23, 9));
+      var e = Store.addEvent('2026-11-23', '', '병원');
+      var todoId = Store.todayList()[0].id;
+      var removed = Store.removeEvent(e.id);
+      eq(removed.todo.id, todoId, '함께 지운 할 일');
+      eq(Store.todayList(), []);
+      eq(Store.restoreEvent(removed), true);
+      eq([Store.eventCount(), Store.todayList()[0].id], [1, todoId], '둘 다 복원');
+      Store.toggle(todoId);
+      removed = Store.removeEvent(e.id);
+      eq(removed.todo, undefined, '완료한 할 일은 지우지 않음');
+      eq(Store.todayList().length, 1);
+    });
+    test('category·synced 없는 옛 일정: personal, 오늘이면 할 일로 옮김', function () {
+      setNow(L(2026, 11, 22, 9));
+      seed({ version: 1, settings: {}, todos: [], events: [goodEvent({ time: '08:00' })] });
+      eq(Store.eventsOn('2026-11-22')[0].category, 'personal');
+      eq(titles(Store.todayList()), ['08:00 일정']);
+      eq(localStorage.getItem(CORRUPT_KEY), null);
+    });
+    test('validateBackup: 일정 category·synced, 할 일 eventId', function () {
+      eq(Store.validateBackup({ version: 1, todos: [], events: [goodEvent({ category: 'work', synced: true })] }).ok, true);
+      bad({ version: 1, todos: [], events: [goodEvent({ category: 'x' })] }, 'category');
+      bad({ version: 1, todos: [], events: [goodEvent({ synced: 'y' })] }, 'synced');
+      var t = todo('a', { createdAt: 1 }); t.eventId = 5;
+      bad({ version: 1, todos: [t] }, 'eventId');
+      t.eventId = 'e1';
+      eq(Store.validateBackup({ version: 1, todos: [t] }).ok, true);
+    });
+
     /* ---- 격리 ---- */
     test('실제 키(todo-app-v1)를 건드리지 않음', function () {
       Store.add('a', 'work');
