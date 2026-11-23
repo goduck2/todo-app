@@ -1,7 +1,7 @@
 /* 서비스 워커: 앱 파일을 캐시하고(오프라인 실행), 캐시 우선 + 뒤에서 갱신한다.
    http/https에서만 실행되므로 이 파일 안에서는 fetch/caches를 쓴다.
    배포할 때마다 CACHE_VERSION을 올린다(새 버전 안내와 이전 캐시 삭제의 기준). */
-var CACHE_VERSION = 'v3';
+var CACHE_VERSION = 'v4';
 var CACHE_PREFIX = 'todo-app-';
 var CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 

@@ -90,6 +90,12 @@ body {
 .banner[hidden] { display: none; }
 .banner--update { background: #e6efff; border-color: #9db8ff; }
 .banner__text { margin: 0; }
+.banner__body { min-width: 0; }
+.banner__events { margin: 6px 0 0; padding-left: 1.2em; font-size: 0.95rem; }
+.banner__events[hidden] { display: none; }
+.banner__events li { overflow-wrap: anywhere; }
+.banner__time { font-variant-numeric: tabular-nums; font-weight: 600; }
+.banner .btn { flex-shrink: 0; }
 
 /* 2. 진행률 */
 .progress { margin-bottom: 20px; }

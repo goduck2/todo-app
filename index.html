@@ -18,7 +18,10 @@
   <main class="app">
     <!-- 1. 알림 배너 (확인 전에는 닫히지 않음) -->
     <div class="banner" id="reminder-banner" role="status" hidden>
-      <p class="banner__text">오늘 할 일 <strong id="reminder-count">0</strong>개를 확인하세요</p>
+      <div class="banner__body">
+        <p class="banner__text">오늘 할 일 <strong id="reminder-count">0</strong>개<span id="reminder-ev-part" hidden>, 일정 <strong id="reminder-ev-count">0</strong>개</span>를 확인하세요</p>
+        <ul class="banner__events" id="reminder-events" aria-label="오늘 일정" hidden></ul>
+      </div>
       <button type="button" class="btn btn--primary" id="reminder-ack">확인</button>
     </div>
 

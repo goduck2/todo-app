@@ -625,6 +625,10 @@ var Store = (function () {
   var doneEl = document.getElementById('progress-done');
   var bannerEl = document.getElementById('reminder-banner');
   var countEl = document.getElementById('reminder-count');
+  var remEvPart = document.getElementById('reminder-ev-part');
+  var remEvCount = document.getElementById('reminder-ev-count');
+  var remEvList = document.getElementById('reminder-events');
+  var remEvSig = null;                 // 배너 일정 목록을 바뀔 때만 다시 그리기 위한 값
   var ackBtn = document.getElementById('reminder-ack');
   var timeInput = document.getElementById('reminder-time');
   var notifyRow = document.getElementById('notify-row');
@@ -634,6 +638,7 @@ var Store = (function () {
   var baseTitle = document.title;
   var TITLE_DUE = '(확인 필요) 할 일';
   var REMINDER_CHECK_MS = 30 * 1000;
+  var NOTIFY_EVENTS = 3;      // 시스템 알림에 적는 일정 제목 수
   var notifyBroken = false;   // 알림 생성이 한 번 실패하면 이번 접속 동안 다시 시도하지 않음
 
   var CAT_LABEL = { work: '업무', personal: '개인', study: '공부' };
@@ -824,9 +829,42 @@ var Store = (function () {
     if (due) {
       var n = String(Store.openCounts().all);
       if (countEl.textContent !== n) countEl.textContent = n;
+      renderReminderEvents(Store.eventsOn(Store.dateKey()));
     }
     document.title = due ? TITLE_DUE : baseTitle;
     return due;
+  }
+
+  // 배너 안 오늘 일정: 개수와 시간순 제목
+  function renderReminderEvents(evs) {
+    var sig = JSON.stringify(evs.map(eventText));
+    if (sig === remEvSig) return;
+    remEvSig = sig;
+    remEvPart.hidden = evs.length === 0;
+    remEvCount.textContent = String(evs.length);
+    remEvList.hidden = evs.length === 0;
+    remEvList.textContent = '';
+    evs.forEach(function (e) {
+      var li = document.createElement('li');
+      var t = document.createElement('span');
+      t.className = 'banner__time';
+      t.textContent = e.time || '종일';
+      li.appendChild(t);
+      li.appendChild(document.createTextNode(' '));
+      li.appendChild(document.createTextNode(e.title));
+      remEvList.appendChild(li);
+    });
+  }
+
+  // 시스템 알림 본문: 할 일 개수, 오늘 일정 개수와 제목(최대 NOTIFY_EVENTS개)
+  function notifyBody() {
+    var body = '남은 할 일 ' + Store.openCounts().all + '개';
+    var evs = Store.eventsOn(Store.dateKey());
+    if (!evs.length) return body;
+    body += ', 일정 ' + evs.length + '개';
+    evs.slice(0, NOTIFY_EVENTS).forEach(function (e) { body += '\n· ' + (e.time || '종일') + ' ' + e.title; });
+    if (evs.length > NOTIFY_EVENTS) body += '\n외 ' + (evs.length - NOTIFY_EVENTS) + '개';
+    return body;
   }
 
   function notifySupported() {
@@ -858,7 +896,7 @@ var Store = (function () {
     if (notifyBroken || !notifySupported() || notifyPermission() !== 'granted') return;
     if (!Store.isNotifyDue()) return;
     try {
-      var n = new Notification('오늘의 할 일', { body: '남은 할 일 ' + Store.openCounts().all + '개' });
+      var n = new Notification('오늘의 할 일', { body: notifyBody() });
       n.onclick = function () {
         try { window.focus(); n.close(); } catch (e) { /* 무시 */ }
       };
@@ -1243,6 +1281,7 @@ var Store = (function () {
   function afterEventChange() {
     if (!Store.saveOk()) warnOnce();
     renderSchedule(false);
+    renderReminder();
   }
 
   calBody.addEventListener('click', function (e) {
